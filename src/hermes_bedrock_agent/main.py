@@ -9,12 +9,16 @@ from rich import print as rprint
 from rich.table import Table
 
 from hermes_bedrock_agent.config import Settings
+from hermes_bedrock_agent.doc_analyze.cmd import doc_analyze_app
+from hermes_bedrock_agent.graph_rag_cmd import graph_rag_app
 from hermes_bedrock_agent.kb_client import KBResult, MultiKBClient
 
 app = typer.Typer(
     help="Bedrock Knowledge Base CLI — supports single and multiple KBs.",
     no_args_is_help=True,
 )
+app.add_typer(graph_rag_app, name="graph-rag", help="GraphRAG knowledge graph management.")
+app.add_typer(doc_analyze_app, name="doc-analyze", help="Company document relationship analysis with Mermaid visualization.")
 
 
 # ---------------------------------------------------------------------------

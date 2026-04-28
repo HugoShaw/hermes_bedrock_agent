@@ -1,5 +1,5 @@
 [project]
-name = "hermes-bedrock-agent"
+name = "hermes_bedrock_agent"
 version = "0.1.0"
 description = "Hermes Agent bridge for Amazon Bedrock Knowledge Bases"
 requires-python = ">=3.11"
@@ -11,13 +11,17 @@ dependencies = [
   "rich",
   "httpx",
   "tenacity",
+  "hermes-agent",
+  "pypdf>=4.0",
+  "python-docx>=1.1",
+  "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
 
 [project.scripts]
-hermes-bedrock-agent = "hermes_bedrock_agent.main:app"
+hermes_bedrock_agent = "hermes_bedrock_agent.main:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -35,3 +39,11 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
+
+[tool.uv.sources]
+hermes-agent = { path = "../hermes-agent", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

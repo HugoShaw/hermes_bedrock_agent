@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,6 +27,10 @@ class KBEntry:
 class Settings:
     aws_region: str
     knowledge_bases: list[KBEntry]
+    graphrag_db_path: Path = field(default_factory=lambda: Path.home() / ".hermes_bedrock_agent" / "graphrag.db")
+    graphrag_s3_bucket: str = "s3-hulftchina-rd"
+    graphrag_embedding_model: str = "amazon.titan-embed-text-v2:0"
+    neptune_graph_id: str | None = None
 
     # --- back-compat: single-KB access -----------------------------------------
 
@@ -84,4 +88,18 @@ class Settings:
                 f"or BEDROCK_KNOWLEDGE_BASE_ID in {PROJECT_ROOT / '.env'}."
             )
 
-        return cls(aws_region=region, knowledge_bases=kbs)
+        graphrag_db_path = Path(
+            os.getenv("GRAPHRAG_DB_PATH", str(Path.home() / ".hermes_bedrock_agent" / "graphrag.db"))
+        )
+        graphrag_s3_bucket = os.getenv("GRAPHRAG_S3_BUCKET", "s3-hulftchina-rd")
+        graphrag_embedding_model = os.getenv("GRAPHRAG_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+        neptune_graph_id = os.getenv("NEPTUNE_ANALYTICS_GRAPH_ID") or None
+
+        return cls(
+            aws_region=region,
+            knowledge_bases=kbs,
+            graphrag_db_path=graphrag_db_path,
+            graphrag_s3_bucket=graphrag_s3_bucket,
+            graphrag_embedding_model=graphrag_embedding_model,
+            neptune_graph_id=neptune_graph_id,
+        )
