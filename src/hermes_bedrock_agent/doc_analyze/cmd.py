@@ -57,6 +57,8 @@ def run_cmd(
     title: str = typer.Option(_DEFAULT_TITLE, "--title", help="Title for the diagram."),
     model: Optional[str] = typer.Option(None, "--model", help="Bedrock model ID override."),
     max_chars: int = typer.Option(8000, "--max-chars", help="Max chars per file to include in context."),
+    use_bedrock: bool = typer.Option(False, "--use-bedrock", help="Use direct Bedrock invoke_model instead of Hermes agent."),
+    hermes_timeout: int = typer.Option(300, "--hermes-timeout", help="Seconds to wait for Hermes agent to complete analysis."),
 ) -> None:
     """Analyze documents in an S3 prefix and generate a Mermaid relationship diagram."""
     resolved_bucket = _resolve_bucket(bucket)
@@ -70,6 +72,8 @@ def run_cmd(
     rprint(f"[bold cyan]Analyzing s3://{resolved_bucket}/{prefix}[/bold cyan]")
     rprint(f"  Region : {region}")
     rprint(f"  Model  : {resolved_model}")
+    analyst = f"Bedrock ({resolved_model})" if use_bedrock else "Hermes Agent"
+    rprint(f"  Analyst: {analyst}")
     rprint(f"  Output : {output}")
     rprint()
 
@@ -83,6 +87,8 @@ def run_cmd(
                 region=region,
                 model_id=resolved_model,
                 max_chars_per_file=max_chars,
+                use_hermes=not use_bedrock,
+                hermes_timeout=hermes_timeout,
             )
         except RuntimeError as exc:
             progress.stop()
@@ -152,6 +158,8 @@ def upload_cmd(
             title=_DEFAULT_TITLE,
             model=None,
             max_chars=8000,
+            use_bedrock=False,
+            hermes_timeout=300,
         )
 
 

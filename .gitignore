@@ -19,11 +19,15 @@ uv.lock
 
 # Env / secrets
 .env
-.env.*
+.env.local
 *.pem
 *.key
 *.crt
 *.jks
+iam_*.json
+
+# Configs (may contain credentials/endpoints)
+configs/
 
 # Logs
 *.log

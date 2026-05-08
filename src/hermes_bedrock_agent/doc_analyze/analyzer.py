@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,6 +59,39 @@ _JSON_SCHEMA = """{
     {"from_id": "entity_id", "to_id": "entity_id", "type": "hierarchy|integration|data_flow|business_process|other", "label": "relationship label", "direction": "uni|bi"}
   ]
 }"""
+
+
+def _build_hermes_prompt(file_paths: list[str]) -> str:
+    """Build a self-contained prompt for `hermes chat -q` to read & analyze files."""
+    file_list = "\n".join(f"  - {p}" for p in file_paths)
+    return f"""You are an expert enterprise architect. Your task is to analyze the following company document files and identify organizational and technical relationships.
+
+FILES TO ANALYZE:
+{file_list}
+
+INSTRUCTIONS:
+1. Use your file reading tools to read EACH file listed above, one by one.
+2. After reading all files, reason about:
+   a. HIERARCHICAL relationships: company → subsidiary → department → team, or parent system → subsystem → module
+   b. CROSS-SYSTEM / CROSS-SUBSIDIARY relationships: data flows, API integrations, business processes that span entities, shared services
+3. Identify ALL entities (companies, subsidiaries, departments, teams, systems, modules) mentioned across ALL files.
+4. Identify ALL relationships between those entities.
+
+OUTPUT FORMAT — you MUST end your response with this exact structure (replace the example with your actual findings):
+
+<RESULT>
+{{
+  "summary": "one or two sentence summary of what you found",
+  "entities": [
+    {{"id": "unique_snake_case_id", "name": "Display Name", "type": "company|subsidiary|department|system|module|team|other", "description": "brief description"}}
+  ],
+  "relationships": [
+    {{"from_id": "entity_id", "to_id": "entity_id", "type": "hierarchy|integration|data_flow|business_process|other", "label": "relationship label", "direction": "uni|bi"}}
+  ]
+}}
+</RESULT>
+
+Start by reading the files now, then produce your analysis."""
 
 
 def _build_prompt(file_contents: dict[str, str]) -> str:
@@ -114,6 +149,18 @@ def _parse_json_robust(text: str) -> tuple[dict, str]:
     return {}, f"Could not parse JSON from LLM response (length={len(text)})"
 
 
+def _extract_result_block(text: str) -> str:
+    """Extract content between <RESULT> and </RESULT> tags from Hermes output.
+
+    Falls back to the full text if tags are not found (so _parse_json_robust still runs).
+    """
+    import re as _re
+    m = _re.search(r"<RESULT>\s*([\s\S]*?)\s*</RESULT>", text)
+    if m:
+        return m.group(1).strip()
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Bedrock call
 # ---------------------------------------------------------------------------
@@ -133,6 +180,42 @@ def _call_bedrock(prompt: str, model_id: str, region: str) -> str:
         raise RuntimeError(f"Bedrock invoke_model failed: {exc}") from exc
 
 
+def _call_hermes_agent(file_paths: list[str], timeout: int = 300) -> str:
+    """Spawn `hermes chat -q` with file-reading tools to analyze documents.
+
+    Returns the raw stdout from Hermes. The caller extracts the <RESULT>…</RESULT> block.
+    """
+    hermes_bin = shutil.which("hermes")
+    if not hermes_bin:
+        raise RuntimeError(
+            "hermes CLI not found on PATH. Install Hermes Agent or use --use-bedrock flag."
+        )
+
+    prompt = _build_hermes_prompt(file_paths)
+
+    try:
+        proc = subprocess.run(
+            [hermes_bin, "chat", "-q", prompt, "-Q", "-t", "file"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=None,  # inherit full environment including AWS_ vars and HERMES config
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"Hermes agent timed out after {timeout}s. Try increasing --hermes-timeout or use --use-bedrock."
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Failed to spawn hermes: {exc}") from exc
+
+    if not proc.stdout.strip() and proc.returncode != 0:
+        raise RuntimeError(
+            f"Hermes exited with code {proc.returncode}. stderr: {proc.stderr[:500]}"
+        )
+
+    return proc.stdout
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -143,8 +226,10 @@ def analyze_directory(
     region: str,
     model_id: str,
     max_chars_per_file: int = 8000,
+    use_hermes: bool = True,
+    hermes_timeout: int = 300,
 ) -> AnalysisResult:
-    """List S3 files under *prefix*, extract text, call Bedrock, return AnalysisResult."""
+    """List S3 files under *prefix*, extract text, call analyst, return AnalysisResult."""
 
     # 1. List files
     all_files = list_files(bucket, prefix, region)
@@ -178,9 +263,23 @@ def analyze_directory(
     if not file_contents:
         raise RuntimeError("All files failed to download or extract. Check S3 permissions and file formats.")
 
-    # 3. Build prompt and call Bedrock
-    prompt = _build_prompt(file_contents)
-    raw_response = _call_bedrock(prompt, model_id, region)
+    # 3. Call analyst (Hermes agent or Bedrock)
+    if use_hermes:
+        # Write extracted texts to temp files for Hermes to read
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_paths: list[str] = []
+            for i, (filename, text) in enumerate(file_contents.items()):
+                safe_name = f"{i:03d}_{filename}"
+                tmp_path = str(Path(tmpdir) / safe_name)
+                if not tmp_path.endswith(".txt"):
+                    tmp_path += ".txt"
+                Path(tmp_path).write_text(text, encoding="utf-8")
+                tmp_paths.append(tmp_path)
+            raw_response = _call_hermes_agent(tmp_paths, timeout=hermes_timeout)
+        raw_response = _extract_result_block(raw_response)
+    else:
+        prompt = _build_prompt(file_contents)
+        raw_response = _call_bedrock(prompt, model_id, region)
 
     # 4. Parse JSON
     data, parse_error = _parse_json_robust(raw_response)

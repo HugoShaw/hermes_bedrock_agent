@@ -1,7 +1,7 @@
 [project]
 name = "hermes_bedrock_agent"
-version = "0.1.0"
-description = "Hermes Agent bridge for Amazon Bedrock Knowledge Bases"
+version = "0.2.0"
+description = "Enterprise AI platform: Bedrock KB query, S3 document ETL, multimodal parsing, Semantic Map, Neptune Analytics GraphRAG"
 requires-python = ">=3.11"
 dependencies = [
   "boto3",
@@ -11,14 +11,24 @@ dependencies = [
   "rich",
   "httpx",
   "tenacity",
+  "pydantic>=2.0",
+  "pyyaml",
   "hermes-agent",
   "pypdf>=4.0",
   "python-docx>=1.1",
   "numpy>=1.26",
+  "gremlinpython>=3.8.1",
+  "networkx>=3.6.1",
+  "pdfminer-six>=20260107",
+  "openpyxl>=3.1.5",
+  "xlrd>=2.0.2",
+  "python-pptx>=1.0.2",
+  "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "pytest-mock"]
+llama = ["llama-index>=0.10"]
 
 [project.scripts]
 hermes_bedrock_agent = "hermes_bedrock_agent.main:app"
@@ -46,4 +56,5 @@ hermes-agent = { path = "../hermes-agent", editable = true }
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-mock>=3.12",
 ]
