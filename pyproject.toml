@@ -1,7 +1,7 @@
 [project]
 name = "hermes_bedrock_agent"
-version = "0.2.0"
-description = "Enterprise AI platform: Bedrock KB query, S3 document ETL, multimodal parsing, Semantic Map, Neptune Analytics GraphRAG"
+version = "0.3.0"
+description = "Enterprise Hybrid GraphRAG — S3 ingestion, multimodal parsing, Neptune graph, OpenSearch retrieval, Bedrock generation"
 requires-python = ">=3.11"
 dependencies = [
   "boto3",
@@ -12,6 +12,7 @@ dependencies = [
   "httpx",
   "tenacity",
   "pydantic>=2.0",
+  "pydantic-settings>=2.0",
   "pyyaml",
   "hermes-agent",
   "pypdf>=4.0",
@@ -29,6 +30,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "pytest-mock"]
 llama = ["llama-index>=0.10"]
+search = ["opensearch-py>=2.4"]
+api = ["fastapi>=0.110", "uvicorn>=0.27"]
+local-vector = ["lancedb>=0.20"]
 
 [project.scripts]
 hermes_bedrock_agent = "hermes_bedrock_agent.main:app"

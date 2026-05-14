@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-session-viewer"
+version = "0.1.0"
+description = "Convert Hermes Agent session JSON files into interactive HTML visualization pages"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+hermes-session-viewer = "hermes_session_viewer.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hermes_session_viewer"]
