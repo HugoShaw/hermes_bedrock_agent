@@ -1,45 +1,131 @@
-# Python
+# ============================================================
+# hermes_bedrock_agent - .gitignore
+# ============================================================
+
+# --- Python ---
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 *.egg-info/
+*.egg
+dist/
+build/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+*.so
 
-# Virtual env
+# --- Virtual environments ---
 .venv/
 venv/
 env/
+ENV/
 
-# uv
+# --- uv ---
 .uv/
 uv.lock
 
-# Env / secrets
+# --- Environment / Secrets / Keys ---
+# NEVER commit secrets, API keys, credentials, or auth tokens
 .env
-.env.local
+.env.*
+!.env.example
 *.pem
 *.key
 *.crt
 *.jks
+*.p12
+*.pfx
 iam_*.json
+*credentials*
+*secret*
+*token*
 
-# Configs (may contain credentials/endpoints)
+# --- AWS / Cloud Infrastructure IDs ---
+# Files containing AWS account numbers, Neptune Graph IDs, or resource ARNs
+iam_neptune_data_policy.json
+NEPTUNE_FIX_GUIDE.md
+
+# Scripts with hardcoded AWS infra IDs (Neptune endpoints, account numbers)
+scripts/neptune_gremlin_writer.py
+scripts/neptune_full_import.py
+scripts/neptune_sample_import.py
+scripts/neptune_writer.py
+scripts/export_mermaid.py
+scripts/qa_terminal_demo.py
+scripts/qa_terminal.py
+scripts/query_demo.py
+scripts/run_e2e_murata_pipeline.py
+scripts/run_qa_demo_batch.py
+scripts/validate_i18n_retrieval.py
+scripts/validate_phase10b2_hybrid.py
+scripts/phase94_retrieval_viz.py
+src/hermes_bedrock_agent/v2/pipelines/export_excel_graph_html.py
+tests/test_qa_terminal.py
+
+# Docs containing Neptune/AWS account references
+docs/e2e_murata_test.md
+docs/demo_outputs/demo_summary.md
+docs/murata_rebuild_r7_neptune_preview_report.md
+docs/murata_rebuild_r8_neptune_dryrun_report.md
+docs/murata_rebuild_r9_neptune_connectivity_report.md
+docs/murata_rebuild_r9_neptune_sample_import_report.md
+docs/murata_rebuild_r10_connectivity_report.md
+docs/murata_rebuild_r10_full_import_report.md
+docs/murata_rebuild_r11_hybrid_retrieval_report.md
+docs/murata_rebuild_r12_qa_terminal_usage.md
+docs/prompts/phase_r8_neptune_dryrun_preview.md
+docs/prompts/phase_r9_neptune_sample_import_validation.md
+docs/prompts/phase_r10_neptune_full_import_validation.md
+docs/prompts/phase_r11_hybrid_retrieval_qa_validation.md
+docs/prompts/phase_r12_qa_terminal_demo_packaging.md
+docs/refactor_scan_report.md
+docs/task_state.md
+
+# --- Configs (may contain endpoints, IDs, credentials) ---
 configs/
 
-# Logs
+# --- Logs ---
 *.log
 logs/
 
-# OS / IDE
-.DS_Store
-.vscode/
-.idea/
-
-# Data / cache
+# --- Data (input files, source Excel/PDF, vector stores, caches) ---
 data/
 tmp/
 cache/
+/tmp/
+
+# --- Output / Generated artifacts (screenshots, PDFs, parsed results) ---
+# These are large generated artifacts; regenerate from source
 outputs/
+output/
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Claude task specs (ephemeral session-specific instructions) ---
+.claude_task_*.md
+
+# --- Garbage files (accidental shell output) ---
+4d}x{s[max_column]:
+5d}
+Yn
+
+# --- Node / Puppeteer ---
+node_modules/
+puppeteer-config.json
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+*.ipynb
+
+# --- Binary / media (large generated images, PDFs) ---
+# Keep committed only docs/ assets that are small and curated
+# All generated screenshots/PDFs live under data/ or outputs/ (already excluded)

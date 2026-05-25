@@ -1,0 +1,412 @@
+{
+  "result": {
+    "question": "SUN_REQUEST、JOURNAL_BASE、RECEIVING_JOURNAL 三张表之间，在没有外键的情况下：\n1. 通过哪些字段形成关联\n2. 这些关联在代码中是如何体现的，如 SQL 或 Mapper\n3. 在业务流程中的数据流转路径",
+    "language": "zh-CN",
+    "search_terms": [
+      "JOURNAL_BASE",
+      "SUN_REQUEST",
+      "RECEIVING_JOURNAL",
+      "Journal",
+      "Receiving",
+      "Sun"
+    ],
+    "vector_hits": 10,
+    "graph_entities": 14,
+    "graph_neighbors": 140,
+    "answer": "# SUN_REQUEST、JOURNAL_BASE、RECEIVING_JOURNAL 三表关联分析\n\n---\n\n## 1. 关联字段定义\n\n三表之间通过 `OTHER_SYSTEM_NO` 字段形成关联链路，但匹配方式不同：\n\n### 关联1：JOURNAL_BASE ↔ RECEIVING_JOURNAL（精确匹配）\n\n| 表 | 字段 | 类型 | 角色 |\n|---|---|---|---|\n| JOURNAL_BASE | `OTHER_SYSTEM_NO` | VARCHAR2(20), PK | 外部MS系统传入的原始交易号 |\n| RECEIVING_JOURNAL | `OTHER_SYSTEM_NO` | VARCHAR2(20) | 引用上述交易号 |\n\n```sql\nJOIN RECEIVING_JOURNAL rj ON jb.OTHER_SYSTEM_NO = rj.OTHER_SYSTEM_NO\n```\n> 来源：文档证据1、证据3\n\n---\n\n### 关联2：SUN_REQUEST ↔ RECEIVING_JOURNAL（子串匹配）\n\n| 表 | 字段 | 类型 | 角色 |\n|---|---|---|---|\n| SUN_REQUEST | `OTHER_SYSTEM_NO` | VARCHAR2(20), PK | GL传票号（系统生成） |\n| RECEIVING_JOURNAL | `OTHER_SYSTEM_NO` | VARCHAR2(20) | 原始交易号（来自MS系统） |\n\n```sql\nLEFT JOIN RECEIVING_JOURNAL RJ\n  ON SUBSTR(RJ.OTHER_SYSTEM_NO, 0, 12) = SUBSTR(SR.OTHER_SYSTEM_NO, 0, 12)\n```\n\n**为何用 SUBSTR 而非精确匹配？**\n- `SUN_REQUEST.OTHER_SYSTEM_NO` 是付款申请审批通过后由系统生成的 **GL传票号**\n- `RECEIVING_JOURNAL.OTHER_SYSTEM_NO` 是来自 MS 系统的 **原始交易号**\n- 两者共享**前12位前缀**（设计约定），后续位数不同\n- 这是一种\"软关联\"设计模式，无物理外键约束\n> 来源：文档证据1、证据3\n\n---\n\n### 关联3：JOURNAL_BASE ↔ SUN_REQUEST（间接，无直接字段）\n\n```\nJOURNAL_BASE.OTHER_SYSTEM_NO\n    → (精确匹配) → RECEIVING_JOURNAL.OTHER_SYSTEM_NO\n    → (SUBSTR前12位) → SUN_REQUEST.OTHER_SYSTEM_NO\n```\n\n两者**没有直接关联字段**，必须以 `RECEIVING_JOURNAL` 作为桥接中转。\n> 来源：文档证据1、证据3\n\n---\n\n## 2. 代码层面的体现\n\n### 2.1 SQL 层（PaymentReqAction.countCalculate()）\n\n这是**唯一需要跨越三表**的业务场景，用于计算付款申请的 `O_VAT`（已有消費税）：\n\n```sql\n-- 来源：文档证据1、证据3\nSELECT SUM(SR.TRANSACTION_AMOUNT)\nFROM SUN_REQUEST SR\nLEFT JOIN RECEIVING_JOURNAL RJ\n    ON SUBSTR(RJ.OTHER_SYSTEM_NO, 0, 12) = SUBSTR(SR.OTHER_SYSTEM_NO, 0, 12)\nWHERE SR.ACCOUNT_CODE = '04991'        -- 消費税差额科目\n  AND RJ.PAY_NO IN (...)               -- 限定对账单范围\n```\n\n完整三表链路查询（通过视图）：\n```sql\n-- 来源：文档证据4（V_PAYMENT_RECEIVING视图）\nJOURNAL_BASE jb\n  JOIN RECEIVING_JOURNAL rj ON jb.OTHER_SYSTEM_NO = rj.OTHER_SYSTEM_NO\n  JOIN RECEIVING_LIST    rl ON rj.PAY_NO = rl.PAY_NO\n  -- SUN_REQUEST通过SUBSTR在countCalculate中单独关联\n```\n\n> ⚠️ SUBSTR函数操作导致**索引失效**，当前数据量（SUN_REQUEST ~1000行，RECEIVING_JOURNAL ~2000行）尚可接受；若数据增长，建议创建函数索引：\n> ```sql\n> CREATE INDEX IDX_RJ_SUBSTR ON RECEIVING_JOURNAL(SUBSTR(OTHER_SYSTEM_NO, 1, 12));\n> CREATE INDEX IDX_SR_SUBSTR ON SUN_REQUEST(SUBSTR(OTHER_SYSTEM_NO, 1, 12));\n> ```\n\n### 2.2 Java Mapper / HQL 层\n\n**RECEIVING_JOURNAL Entity（ReceivingJournal.java）**\n```java\n// 来源：文档证据2\n@Entity @Table(name=\"RECEIVING_JOURNAL\")\npublic class ReceivingJournal extends BaseEntity {\n    @Id private String pk;\n    private String payNo;           // → PAY_NO (FK → RECEIVING_LIST)\n    private String otherSystemNo;   // → OTHER_SYSTEM_NO (FK → JOURNAL_BASE)\n    private String transactionReference;\n}\n```\n\n**关键 HQL 查询**\n```java\n// 来源：文档证据2\n// 防重复检查（关联到JOURNAL_BASE前验证）\n\"FROM ReceivingJournal WHERE otherSystemNo IN (:ids)\"\n\n// 按对账单查询已关联的JOURNAL_BASE记录\n\"FROM ReceivingJournal WHERE payNo = :payNo AND delFlg = '0'\"\n\n// 逻辑删除（释放JOURNAL_BASE锁定）\n\"UPDATE ReceivingJournal SET delFlg='1' WHERE payNo IN (:payNos)\"\n```\n\n**关联写入代码（ReceigIngServiceImpl.saveReceivingList()）**\n```java\n// 来源：文档证据1\nrj.setOtherSystemNo(jb.getOtherSystemNo());  // 建立 RJ → JB 的关联\n```\n\n---\n\n## 3. 业务流程数据流转路径\n\n```\n┌─────────────────────────────────────────────────────────────────────┐\n│ 外部MS系统 →(HULFT文件传输)→ JOURNAL_BASE                           │\n│   LIST_TYPE='0', CPL_MK='8'                                         │\n│   OTHER_SYSTEM_NO = \"原始交易号\"（12位前缀+后缀）                   │\n└──────────────────────────┬──────────────────────────────────────────┘\n                           │ ① 用户在Receiving画面选择记录\n                           │   条件：CPL_MK='8' AND LIST_TYPE='0'\n                           ▼\n┌─────────────────────────────────────────────────────────────────────┐\n│ RECEIVING_JOURNAL（桥接表）                                         │\n│   OTHER_SYSTEM_NO = JOURNAL_BASE.OTHER_SYSTEM_NO  ← 精确写入       │\n│   PAY_NO          = 新生成的对账单号                                │\n│   同时：JOURNAL_BASE.LIST_TYPE → '1'（锁定，防重复选入）            │\n└──────────────────────────┬──────────────────────────────────────────┘\n                           │ ② 对账单生成→付款申请→审批通过\n                           │   PAYMENT_REQ.STATUS → 3（承认完了）\n                           ▼\n┌─────────────────────────────────────────────────────────────────────┐\n│ SUN_REQUEST（GL总账传票）                                           │\n│   OTHER_SYSTEM_NO = \"GL传票号\"（前12位与原始交易号相同）            │\n│   ACCOUNT_CODE = '04991'（消費税差额分录）                          │\n│   → 通过HULFT传输到SUN ERP完成总账记账                             │\n└──────────────────────────┬──────────────────────────────────────────┘\n                           │ ③ 反查（countCalculate追溯O_VAT）\n                           │   SUBSTR(SR.OTHER_SYSTEM_NO,0,12)\n                           │   = SUBSTR(RJ.OTHER_SYSTEM_NO,0,12)\n                           ▼\n                    回溯至 RECEIVING_JOURNAL → JOURNAL_BASE\n```\n\n### 完整数据流转路径（文字版）\n\n| 阶段 | 操作 | 涉及表 | 关键状态变化 |\n|---|---|---|---|\n| **①导入** | MS系统→HULFT→系统 | `JOURNAL_BASE` | `LIST_TYPE=0`, `CPL_MK=8` |\n| **②分组** | 用户选择记录生成对账单 | `JOURNAL_BASE` → `RECEIVING_JOURNAL` → `RECEIVING_LIST` | `LIST_TYPE: 0→1` |\n| **③申请** | 对账单纳入付款申请 | `RECEIVING_LIST` → `PAYMENT_RECEIVING` → `PAYMENT_REQ` | `STATUS: 1→0`(RL锁定) |\n| **④审批** | 审批流程 | `PAYMENT_REQ` | `STATUS: 2→3` |\n| **⑤记账** | 生成GL分录 | `PAYMENT_REQ` → `SUN_REQUEST` | OTHER_SYSTEM_NO前12位继承 |\n| **⑥追溯** | 计算O_VAT | `SUN_REQUEST` ←SUBSTR→ `RECEIVING_JOURNAL` | 唯一跨三表查询场景 |\n\n> 来源：文档证据3、证据6\n\n---\n\n## 总结\n\n```\nJOURNAL_BASE ←──精确匹配 OTHER_SYSTEM_NO──→ RECEIVING_JOURNAL ←──SUBSTR前12位──→ SUN_REQUEST\n    (数据源头/原始交易)              (桥接枢纽)                           (GL总账分录)\n```\n\n`RECEIVING_JOURNAL` 是整个系统的**数据枢纽**：\n- 向左通过精确匹配连接 `JOURNAL_BASE`（采购明细）\n- 向右通过子串匹配连接 `SUN_REQUEST`（GL分录）\n- 实现了\"从GL传票反向追溯到原始采购交易\"的唯一跨模块路径",
+    "answer_length": 5635,
+    "latency": {
+      "vector": 0.1405336856842041,
+      "graph": 0.24699831008911133,
+      "answer": 43.88007855415344,
+      "total": 44.267844438552856
+    },
+    "usage": {
+      "input_tokens": 9678,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 2787
+    },
+    "timestamp": "2026-05-18T06:46:17.958013"
+  },
+  "vec_results_count": 10,
+  "vec_results_preview": [
+    {
+      "source": "V_PAYMENT_RECEIVING.sql",
+      "distance": 0.5373600125312805,
+      "text_preview": "## Q3: SUN_REQUEST / JOURNAL_BASE / RECEIVING_JOURNAL 关联字段\n\n### 关联字段定义(无物理外键,通过应用层保证)\n\n#### 关联1: JOURNAL_BASE ↔ RECEIVING_JOURNAL\n- 左表: JOURNAL_BASE.OTHER_SYSTEM_NO (VARCHAR2(20), PK)\n- 右表: RECEIVING_",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 0.7527215480804443,
+      "text_preview": "CREATE TABLE RECEIVING_JOURNAL (\n  PK VARCHAR2(20) PRIMARY KEY,  -- 主键(自增)\n  PAY_NO VARCHAR2(20),  -- 对账单号 → RECEIVING_LIST.PAY_NO\n  OTHER_SYSTEM_NO VARCHAR2(20),  -- 外部系统号 → JOURNAL_BASE.OTHER_SYSTEM",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 0.7927159667015076,
+      "text_preview": "## 三表关联分析 (无外键情况下的字段级关联)\n\n### 关联路径1: JOURNAL_BASE ↔ RECEIVING_JOURNAL\n- 关联字段: JOURNAL_BASE.OTHER_SYSTEM_NO = RECEIVING_JOURNAL.OTHER_SYSTEM_NO\n- 关联类型: 一对多(一条JOURNAL_BASE可出现在多个对账单的RECEIVING_JOURNAL中 - ",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 0.8895473480224609,
+      "text_preview": "## Q2: JOURNAL_BASE完整分析\n\n### Schema层面\n- 表名: JOURNAL_BASE (31 columns)\n- 主键: OTHER_SYSTEM_NO (VARCHAR2(20), 外部系统号)\n- 关键字段:\n  - LIST_TYPE: 状态控制字段(0=可选,1=已锁定)\n  - CPL_MK: 完了标记(8=検収完了,是进入对账单的前提)\n  - VENDO",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 0.9643765687942505,
+      "text_preview": "CREATE TABLE JOURNAL_BASE (\n  OTHER_SYSTEM_NO VARCHAR2(20) PRIMARY KEY,  -- 外部系统号(唯一标识,来自MS系统)\n  ACCOUNT_CODE VARCHAR2(10),  -- 勘定科目コード\n  LIST_TYPE VARCHAR2(2),  -- 清单类型: 0=未生成对账单, 1=已生成对账单\n  ALLOCATI",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "村田.xlsx",
+      "distance": 1.0639939308166504,
+      "text_preview": "## 数据库6表关联模型与数据生命周期\n\n### 表关联图\n```\nMS系统 →(HULFT)→ JOURNAL_BASE ←(OTHER_SYSTEM_NO)→ RECEIVING_JOURNAL ←(PAY_NO)→ RECEIVING_LIST\n                                                              ↑           ",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 1.1006067991256714,
+      "text_preview": "CREATE TABLE SUN_REQUEST (\n  OTHER_SYSTEM_NO VARCHAR2(20) PRIMARY KEY,  -- GL传票番号\n  ACCOUNT_CODE VARCHAR2(10),  -- 勘定科目: 04991=消費税(VAT)\n  ALLOCATION_MARKER VARCHAR2(5),\n  ANALYSIS_CODE_T VARCHAR2(10),",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "村田.xlsx",
+      "distance": 1.1063098907470703,
+      "text_preview": "## 完整实体关系映射 (Semantic Map核心)\n\n### 数据库实体(6表)\n| 表名 | 主键 | 核心业务字段 | 角色 |\n|------|------|-------------|------|\n| JOURNAL_BASE | OTHER_SYSTEM_NO | VENDOR_CD, LIST_TYPE, CPL_MK, TRANSACTION_AMOUNT | 数据源头/交易",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "PaymentReqServiceImpl.java",
+      "distance": 1.1667243242263794,
+      "text_preview": "## 核心业务规则\n\n### Rule 1: JOURNAL_BASE选入保护\n- 条件: CPL_MK必须为'8'(検收完了)才能被选入对账单\n- 条件: LIST_TYPE必须为'0'(未被选入)才能被选择\n- 保护: 选入后LIST_TYPE→'1',不再出现在查询列表中\n- 释放: 删除对账单时,LIST_TYPE→'0',重新可选\n\n### Rule 2: RECEIVING_LIST锁",
+      "chunk_purpose": "code_evidence"
+    },
+    {
+      "source": "JournalBaseAction.java",
+      "distance": 1.178701400756836,
+      "text_preview": "JournalBaseAction是应付管理系统中对账单生成的前端控制器，负责处理从基础数据到对账单生成的完整业务流程。主要功能包括：1) findReceigIngByParam()根据供应商编码、检验日期、PO号等条件查询JOURNAL_BASE中未生成对账单的记录(LIST_TYPE='0', CPL_MK='8', DEL_FLG='0')；2) findReceigConfirmSLis",
+      "chunk_purpose": "summary"
+    }
+  ],
+  "graph_results_count": 14,
+  "graph_results_preview": [
+    {
+      "entity": {
+        "eid": "ent_data_table_journal_base",
+        "cname": "JOURNAL_BASE",
+        "lbls": [
+          "Table"
+        ]
+      },
+      "neighbor_count": 30,
+      "neighbors_preview": [
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "has_field",
+          "tgt": "CURRENCY_CODE",
+          "tgt_id": "ent_data_column_currency_code",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "contains",
+          "tgt": "CURRENCY_CODE",
+          "tgt_id": "ent_data_column_currency_code",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "has_field",
+          "tgt": "TAX_RATE",
+          "tgt_id": "ent_data_column_tax_rate",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "contains",
+          "tgt": "TAX_RATE",
+          "tgt_id": "ent_data_column_tax_rate",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "has_field",
+          "tgt": "ALLOCATION_MARKER",
+          "tgt_id": "ent_data_column_allocation_marker",
+          "tgt_labels": [
+            "Column"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_system_class_idx_journal_base_vendor",
+        "cname": "IDX_JOURNAL_BASE_VENDOR",
+        "lbls": [
+          "Class"
+        ]
+      },
+      "neighbor_count": 0,
+      "neighbors_preview": []
+    },
+    {
+      "entity": {
+        "eid": "ent_data_table_idx_journal_base_vendor",
+        "cname": "IDX_JOURNAL_BASE_VENDOR",
+        "lbls": [
+          "Table"
+        ]
+      },
+      "neighbor_count": 0,
+      "neighbors_preview": []
+    },
+    {
+      "entity": {
+        "eid": "ent_data_table_sun_request",
+        "cname": "SUN_REQUEST",
+        "lbls": [
+          "Table"
+        ]
+      },
+      "neighbor_count": 30,
+      "neighbors_preview": [
+        {
+          "src": "SUN_REQUEST",
+          "rel": "exports",
+          "tgt": "SUN ERP",
+          "tgt_id": "ent_system_external_system_sun_erp",
+          "tgt_labels": [
+            "ExternalSystem"
+          ]
+        },
+        {
+          "src": "SUN_REQUEST",
+          "rel": "flows_to",
+          "tgt": "SUN ERP",
+          "tgt_id": "ent_system_external_system_sun_erp",
+          "tgt_labels": [
+            "ExternalSystem"
+          ]
+        },
+        {
+          "src": "SUN_REQUEST",
+          "rel": "contains",
+          "tgt": "SUN_REQUEST_Request1",
+          "tgt_id": "ent_business_business_object_sun_request_request1",
+          "tgt_labels": [
+            "BusinessObject"
+          ]
+        },
+        {
+          "src": "SUN_REQUEST",
+          "rel": "flows_to",
+          "tgt": "HULFT",
+          "tgt_id": "ent_system_service_hulft",
+          "tgt_labels": [
+            "Service"
+          ]
+        },
+        {
+          "src": "SUN_REQUEST",
+          "rel": "exports",
+          "tgt": "HULFT",
+          "tgt_id": "ent_system_service_hulft",
+          "tgt_labels": [
+            "Service"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_data_view_idx_sun_request_acct",
+        "cname": "IDX_SUN_REQUEST_ACCT",
+        "lbls": [
+          "View"
+        ]
+      },
+      "neighbor_count": 1,
+      "neighbors_preview": [
+        {
+          "src": "IDX_SUN_REQUEST_ACCT",
+          "rel": "depends_on",
+          "tgt": "countCalculate",
+          "tgt_id": "ent_system_method_count_calculate",
+          "tgt_labels": [
+            "Method"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_business_business_object_sun_request_request1",
+        "cname": "SUN_REQUEST_Request1",
+        "lbls": [
+          "BusinessObject"
+        ]
+      },
+      "neighbor_count": 1,
+      "neighbors_preview": [
+        {
+          "src": "SUN_REQUEST_Request1",
+          "rel": "contains",
+          "tgt": "SUN_REQUEST",
+          "tgt_id": "ent_data_table_sun_request",
+          "tgt_labels": [
+            "Table"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_data_table_receiving_journal",
+        "cname": "RECEIVING_JOURNAL",
+        "lbls": [
+          "Table"
+        ]
+      },
+      "neighbor_count": 30,
+      "neighbors_preview": [
+        {
+          "src": "RECEIVING_JOURNAL",
+          "rel": "references",
+          "tgt": "JOURNAL_BASE",
+          "tgt_id": "ent_data_table_journal_base",
+          "tgt_labels": [
+            "Table"
+          ]
+        },
+        {
+          "src": "RECEIVING_JOURNAL",
+          "rel": "reads_from",
+          "tgt": "JOURNAL_BASE",
+          "tgt_id": "ent_data_table_journal_base",
+          "tgt_labels": [
+            "Table"
+          ]
+        },
+        {
+          "src": "RECEIVING_JOURNAL",
+          "rel": "relates_to",
+          "tgt": "JOURNAL_BASE",
+          "tgt_id": "ent_data_table_journal_base",
+          "tgt_labels": [
+            "Table"
+          ]
+        },
+        {
+          "src": "RECEIVING_JOURNAL",
+          "rel": "joins_on",
+          "tgt": "JOURNAL_BASE",
+          "tgt_id": "ent_data_table_journal_base",
+          "tgt_labels": [
+            "Table"
+          ]
+        },
+        {
+          "src": "RECEIVING_JOURNAL",
+          "rel": "contains",
+          "tgt": "TRANSACTION_REFERENCE",
+          "tgt_id": "ent_data_column_transaction_reference",
+          "tgt_labels": [
+            "Column"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_system_class_seq_receiving_journal",
+        "cname": "SEQ_RECEIVING_JOURNAL",
+        "lbls": [
+          "Class"
+        ]
+      },
+      "neighbor_count": 1,
+      "neighbors_preview": [
+        {
+          "src": "SEQ_RECEIVING_JOURNAL",
+          "rel": "generates",
+          "tgt": "RECEIVING_JOURNAL",
+          "tgt_id": "ent_data_table_receiving_journal",
+          "tgt_labels": [
+            "Table"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_system_class_receiving_journal",
+        "cname": "ReceivingJournal",
+        "lbls": [
+          "Class"
+        ]
+      },
+      "neighbor_count": 1,
+      "neighbors_preview": [
+        {
+          "src": "ReceivingJournal",
+          "rel": "maps_to",
+          "tgt": "RECEIVING_JOURNAL",
+          "tgt_id": "ent_data_table_receiving_journal",
+          "tgt_labels": [
+            "Table"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_system_class_journal_base",
+        "cname": "JournalBase",
+        "lbls": [
+          "Class"
+        ]
+      },
+      "neighbor_count": 1,
+      "neighbors_preview": [
+        {
+          "src": "JournalBase",
+          "rel": "maps_to",
+          "tgt": "JOURNAL_BASE",
+          "tgt_id": "ent_data_table_journal_base",
+          "tgt_labels": [
+            "Table"
+          ]
+        }
+      ]
+    }
+  ],
+  "vec_context_length": 14695,
+  "graph_context_length": 3423,
+  "config": {
+    "run_id": "murata_rebuild_v1",
+    "dataset": "murata",
+    "collection": "murata_e2e_murata_rebuild_v1",
+    "top_k": 10,
+    "graph_depth": 2,
+    "max_graph_edges": 30,
+    "view": "full",
+    "lang": "zh"
+  }
+}

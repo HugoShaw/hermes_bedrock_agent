@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html><head>
+<title>Murata GraphRAG — Q4 Semantic Map</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+body { margin: 0; padding: 20px; background: #1a1a2e; color: #eee; font-family: sans-serif; }
+h1 { text-align: center; color: #4fc3f7; }
+#graph { width: 100%; height: 80vh; border: 1px solid #333; border-radius: 8px; }
+.legend { display: flex; gap: 20px; justify-content: center; margin: 10px; }
+.legend span { padding: 4px 12px; border-radius: 4px; font-size: 12px; }
+</style>
+</head><body>
+<h1>Murata GraphRAG — Q4 Semantic Map</h1>
+<div class="legend">
+  <span style="background:#4fc3f7;color:#000">Table</span>
+  <span style="background:#81c784;color:#000">Process</span>
+  <span style="background:#ffb74d;color:#000">External</span>
+  <span style="background:#ce93d8;color:#000">Other</span>
+</div>
+<div id="graph"></div>
+<script>
+var nodes = new vis.DataSet([{"id": "ms_system", "label": "MS系统/外部订単", "color": "#ffb74d"}, {"id": "hulft", "label": "HULFT転送", "color": "#ce93d8"}, {"id": "journal_base", "label": "JOURNAL_BASE", "color": "#4fc3f7"}, {"id": "receiving_list", "label": "RECEIVING_LIST/対帳単", "color": "#4fc3f7"}, {"id": "receiving_journal", "label": "RECEIVING_JOURNAL", "color": "#4fc3f7"}, {"id": "approval_1", "label": "対帳単審批", "color": "#81c784"}, {"id": "payment_req", "label": "PAYMENT_REQ/付款申請", "color": "#4fc3f7"}, {"id": "approval_2", "label": "付款審批", "color": "#81c784"}, {"id": "payment_receiving", "label": "PAYMENT_RECEIVING", "color": "#4fc3f7"}, {"id": "sun_request", "label": "SUN_REQUEST", "color": "#4fc3f7"}, {"id": "sun_erp", "label": "SUN ERP/支付", "color": "#ffb74d"}, {"id": "report", "label": "報表/支払出力", "color": "#ce93d8"}, {"id": "custodian", "label": "CUSTODIAN/管理者", "color": "#ce93d8"}, {"id": "client_entity", "label": "CLIENT_ENTITY/取引先", "color": "#ce93d8"}, {"id": "oa_system", "label": "OA系統", "color": "#ffb74d"}]);
+var edges = new vis.DataSet([{"from": "ms_system", "to": "hulft", "label": "generates", "arrows": "to"}, {"from": "hulft", "to": "journal_base", "label": "generates", "arrows": "to"}, {"from": "journal_base", "to": "receiving_list", "label": "generates", "arrows": "to"}, {"from": "receiving_list", "to": "approval_1", "label": "depends_on", "arrows": "to"}, {"from": "approval_1", "to": "receiving_journal", "label": "generates", "arrows": "to"}, {"from": "receiving_journal", "to": "payment_req", "label": "generates", "arrows": "to"}, {"from": "payment_req", "to": "approval_2", "label": "depends_on", "arrows": "to"}, {"from": "approval_2", "to": "payment_receiving", "label": "generates", "arrows": "to"}, {"from": "payment_receiving", "to": "sun_request", "label": "generates", "arrows": "to"}, {"from": "sun_request", "to": "sun_erp", "label": "generates", "arrows": "to"}, {"from": "sun_erp", "to": "report", "label": "generates", "arrows": "to"}, {"from": "custodian", "to": "approval_1", "label": "relates_to", "arrows": "to"}, {"from": "custodian", "to": "approval_2", "label": "relates_to", "arrows": "to"}, {"from": "client_entity", "to": "payment_req", "label": "relates_to", "arrows": "to"}, {"from": "oa_system", "to": "approval_2", "label": "relates_to", "arrows": "to"}]);
+var container = document.getElementById('graph');
+var data = { nodes: nodes, edges: edges };
+var options = {
+  nodes: { shape: 'box', font: { size: 14, color: '#fff' }, borderWidth: 2 },
+  edges: { font: { size: 10, color: '#aaa' }, color: '#666' },
+  physics: { solver: 'forceAtlas2Based', stabilization: { iterations: 100 } },
+  layout: { improvedLayout: true }
+};
+new vis.Network(container, data, options);
+</script>
+</body></html>

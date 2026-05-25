@@ -1,0 +1,288 @@
+{
+  "result": {
+    "question": "JOURNAL_BASE 表在系统中的作用是什么？\n请结合：\n1. 表结构\n2. 相关业务流程\n3. 调用该表的代码模块进行说明",
+    "language": "zh-CN",
+    "search_terms": [
+      "JOURNAL_BASE",
+      "Journal"
+    ],
+    "vector_hits": 10,
+    "graph_entities": 6,
+    "graph_neighbors": 46,
+    "answer": "# JOURNAL_BASE 表综合分析\n\n## 1. 表结构\n\n基于文档证据2，JOURNAL_BASE 共有 **31 个字段**，主键为 `OTHER_SYSTEM_NO`（外部系统号），核心字段如下：\n\n| 字段名 | 类型 | 业务含义 |\n|--------|------|----------|\n| `OTHER_SYSTEM_NO` | VARCHAR2(20) **PK** | 外部系统唯一标识，来自 MS 系材系统 |\n| `LIST_TYPE` | VARCHAR2(2) | **状态控制核心**：`0`=未生成对账单（可选），`1`=已生成对账单（锁定） |\n| `CPL_MK` | VARCHAR2(5) | **完了标记**：`8`=検収完了，是进入对账单流程的前提条件 |\n| `VENDOR_CD` | VARCHAR2(20) | 供应商编码，查询过滤与分组依据 |\n| `ID_NO1_CODE` | VARCHAR2(30) | PO No.（采购订单号） |\n| `TRANSACTION_AMOUNT` | VARCHAR2(20) | 交易金额，汇总计算基础 |\n| `TAX_RATE` | VARCHAR2(10) | 税率 / 贸易类型代码 |\n| `TRANSACTION_DATE` | TIMESTAMP | 交易日期（Slip Date） |\n| `ACCOUNTING_DATE` | TIMESTAMP | 検収日 / 会计日期 |\n| `CURRENCY_CODE` | VARCHAR2(5) | 币种 |\n\n### 状态机模型\n\n```\n外部MS系统推送\n      ↓\n LIST_TYPE = '0'   ←──── delReceivingList()（从对账单释放）\n  (可被选择)                         ↑\n      ↓  saveReceivingList()         │\n LIST_TYPE = '1'  ─────────────────→┘\n  (已锁定/编入对账单)\n```\n\n> 来源：文档证据1、2\n\n---\n\n## 2. 业务流程中的角色\n\nJOURNAL_BASE 是**整个 MDW 应付支付系统的数据源头**，处于业务链路的最上游：\n\n```\n外部MS系统\n    ↓ HULFT文件传输\nJOURNAL_BASE（原始采购/收货台账）\n    ↓ 用户在 Receiving 画面选择记录（CPL_MK='8' AND LIST_TYPE='0'）\nRECEIVING_LIST（对账单，PAY_NO）\n  + RECEIVING_JOURNAL（桥接表）\n    ↓\nPAYMENT_REQ（付款申请，BILL_NO）\n    ↓ 审批通过\nSUN_REQUEST（GL 会计分录）\n    ↓\nSUN ERP 总账系统\n```\n\n### 关键业务规则（文档证据10）\n\n1. **进入对账单的双重前提**：`CPL_MK = '8'`（検収完了）且 `LIST_TYPE = '0'`（尚未被占用）\n2. **同一对账单内一致性约束**：同一 `VENDOR_CD`、同一 `CURRENCY_CODE`、同一 `TAX_RATE`（在 Receiving 画面通过查询条件强制保证）\n3. **事务原子性**：对账单生成时，`RECEIVING_LIST` + `RECEIVING_JOURNAL` + `JOURNAL_BASE.LIST_TYPE` 更新在同一事务内完成，任一失败全部回滚\n\n> 来源：文档证据2、8、10\n\n---\n\n## 3. 调用该表的代码模块\n\n### 3.1 JournalBaseAction.java（前端控制器）\n\n> 来源：文档证据3、知识图谱\n\n| 方法 | 功能 | 对 JOURNAL_BASE 的操作 |\n|------|------|------------------------|\n| `findReceigIngByParam()` | 查询可选的收货记录 | `READ`：过滤 `LIST_TYPE='0'`, `CPL_MK='8'`, `DEL_FLG='0'` |\n| `findReceigConfirmSList()` | 获取用户选中记录进行确认 | `READ` |\n| `registReceiving()` | 生成对账单 | 间接触发 `LIST_TYPE: 0→1` |\n| `findReceIvingList()` | 查询已生成的对账单明细 | `READ`（通过 `V_BASE_LIST_JOURNAL` 视图） |\n\n失败时执行 `callBack()` 回滚，物理删除 `RECEIVING_JOURNAL` 和 `RECEIVING_LIST`，并将 `LIST_TYPE` 恢复为 `'0'`。\n\n### 3.2 JournalBaseServiceImpl.java（服务层）\n\n> 来源：文档证据5\n\n核心方法 `findJournalBaseList()`，使用 `HqlFilter` 动态查询框架：\n\n```java\n// 强制过滤条件（不可绕过）\nhqlFilter.addFilter(\"QUERY_t#cplMk_S_EQ\", \"8\");      // 検収完了\nhqlFilter.addFilter(\"QUERY_t#listType_S_EQ\", \"0\");    // 未选入对账单\n\n// 可选查询条件\n// VENDOR_CD / CURRENCY_CODE / BUYER_CODE\n// ACCOUNTING_DATE（范围） / ID_NO1_CODE（范围） / TAX_RATE\n```\n\n### 3.3 ReceigIngServiceImpl.java（对账单生成服务）\n\n> 来源：文档证据1、8\n\n```java\n// saveReceivingList() 中的状态变更\nupdate JournalBase set listType = '1'   // 选入后锁定\n// delReceivingList() 中的状态释放\nupdate JournalBase set listType = '0'   // 删除对账单后解锁\n```\n\n### 3.4 视图层（4 个视图间接引用）\n\n> 来源：文档证据4、6、9\n\n| 视图 | JOIN 路径 | 用途 |\n|------|-----------|------|\n| `V_BASE_LIST_JOURNAL` | `JOURNAL_BASE` → `RECEIVING_JOURNAL` → `RECEIVING_LIST` | Receiving 画面 Unissued/Issued 列表 |\n| `V_RECEIVING_LIST` | 同上 | 对账单明细展示 |\n| `V_PAYMENT_RECEIVING` | 5表全链路（含 `PAYMENT_REQ`） | 付款申请全视图 |\n| `V_PAYMENT_REQ_FILE` | 含 `PAYMENT_REQ` | 报表导出 |\n\n### 3.5 PaymentReqAction.java（付款申请，间接引用）\n\n> 来源：文档证据6、8\n\n在 `countCalculate()` 方法中通过 SUBSTR 子串匹配跨表追溯：\n\n```sql\nLEFT JOIN RECEIVING_JOURNAL RJ\n  ON SUBSTR(RJ.OTHER_SYSTEM_NO, 0, 12) = SUBSTR(SR.OTHER_SYSTEM_NO, 0, 12)\nWHERE SR.ACCOUNT_CODE = '04991'\n```\n\n用于计算付款申请中的 `O_VAT`（已有消費税），是系统中**唯一需要跨 `JOURNAL_BASE` → `SUN_REQUEST` 追溯**的业务场景。\n\n---\n\n## 总结\n\nJOURNAL_BASE 在系统中扮演**\"采购交易原始数据仓库\"**的核心角色：\n\n- **数据来源**：由外部 MS 系材系统通过 HULFT 文件传输导入\n- **状态守门**：通过 `CPL_MK` 和 `LIST_TYPE` 两个字段控制记录是否可进入对账单流程\n- **架构地位**：位于整条业务链路（采购 → 对账 → 付款 → GL）的最上游，是后续所有业务对象的数据根基\n- **唯一数据源**：生成对账单（`RECEIVING_LIST`）的**唯一数据来源**，通过 `RECEIVING_JOURNAL` 桥接表间接关联到付款申请和 GL 分录",
+    "answer_length": 3659,
+    "latency": {
+      "vector": 0.14051270484924316,
+      "graph": 0.1859738826751709,
+      "answer": 39.944490909576416,
+      "total": 40.27111768722534
+    },
+    "usage": {
+      "input_tokens": 8603,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 2292
+    },
+    "timestamp": "2026-05-18T06:43:29.254623"
+  },
+  "vec_results_count": 10,
+  "vec_results_preview": [
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 0.562908947467804,
+      "text_preview": "## Q2: JOURNAL_BASE完整分析\n\n### Schema层面\n- 表名: JOURNAL_BASE (31 columns)\n- 主键: OTHER_SYSTEM_NO (VARCHAR2(20), 外部系统号)\n- 关键字段:\n  - LIST_TYPE: 状态控制字段(0=可选,1=已锁定)\n  - CPL_MK: 完了标记(8=検収完了,是进入对账单的前提)\n  - VENDO",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 0.6435394883155823,
+      "text_preview": "CREATE TABLE JOURNAL_BASE (\n  OTHER_SYSTEM_NO VARCHAR2(20) PRIMARY KEY,  -- 外部系统号(唯一标识,来自MS系统)\n  ACCOUNT_CODE VARCHAR2(10),  -- 勘定科目コード\n  LIST_TYPE VARCHAR2(2),  -- 清单类型: 0=未生成对账单, 1=已生成对账单\n  ALLOCATI",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "JournalBaseAction.java",
+      "distance": 0.7088068127632141,
+      "text_preview": "JournalBaseAction是应付管理系统中对账单生成的前端控制器，负责处理从基础数据到对账单生成的完整业务流程。主要功能包括：1) findReceigIngByParam()根据供应商编码、检验日期、PO号等条件查询JOURNAL_BASE中未生成对账单的记录(LIST_TYPE='0', CPL_MK='8', DEL_FLG='0')；2) findReceigConfirmSLis",
+      "chunk_purpose": "summary"
+    },
+    {
+      "source": "V_BASE_LIST_JOURNAL.sql",
+      "distance": 0.9723607301712036,
+      "text_preview": "CREATE OR REPLACE VIEW V_BASE_LIST_JOURNAL AS\nSELECT \n  jb.OTHER_SYSTEM_NO, jb.VENDOR_CD, jb.VENDOR_NAME, jb.ID_NO1_CODE AS PO_NO,\n  jb.TRANSACTION_DATE, jb.TRANSACTION_AMOUNT AS AMT, jb.UNIT_PRICE,\n ",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "JournalBaseServiceImpl.java",
+      "distance": 0.9996842741966248,
+      "text_preview": "JournalBaseServiceImpl.findJournalBaseList()方法为应付管理系统的Receiving画面提供可选的JOURNAL_BASE记录查询功能。该方法使用HqlFilter动态查询框架，强制过滤条件为CPL_MK=8(检收完成状态)和LIST_TYPE=0(未选入对账单状态)，确保只返回已完成检收但尚未被占用的记录。支持多种可选查询条件包括VENDOR_CD(供应",
+      "chunk_purpose": "summary"
+    },
+    {
+      "source": "V_PAYMENT_RECEIVING.sql",
+      "distance": 1.0157201290130615,
+      "text_preview": "## Q3: SUN_REQUEST / JOURNAL_BASE / RECEIVING_JOURNAL 关联字段\n\n### 关联字段定义(无物理外键,通过应用层保证)\n\n#### 关联1: JOURNAL_BASE ↔ RECEIVING_JOURNAL\n- 左表: JOURNAL_BASE.OTHER_SYSTEM_NO (VARCHAR2(20), PK)\n- 右表: RECEIVING_",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 1.0454630851745605,
+      "text_preview": "CREATE TABLE RECEIVING_JOURNAL (\n  PK VARCHAR2(20) PRIMARY KEY,  -- 主键(自增)\n  PAY_NO VARCHAR2(20),  -- 对账单号 → RECEIVING_LIST.PAY_NO\n  OTHER_SYSTEM_NO VARCHAR2(20),  -- 外部系统号 → JOURNAL_BASE.OTHER_SYSTEM",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "MURATA_20180530.sql",
+      "distance": 1.2429057359695435,
+      "text_preview": "## 三表关联分析 (无外键情况下的字段级关联)\n\n### 关联路径1: JOURNAL_BASE ↔ RECEIVING_JOURNAL\n- 关联字段: JOURNAL_BASE.OTHER_SYSTEM_NO = RECEIVING_JOURNAL.OTHER_SYSTEM_NO\n- 关联类型: 一对多(一条JOURNAL_BASE可出现在多个对账单的RECEIVING_JOURNAL中 - ",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "村田.xlsx",
+      "distance": 1.2437455654144287,
+      "text_preview": "## 完整实体关系映射 (Semantic Map核心)\n\n### 数据库实体(6表)\n| 表名 | 主键 | 核心业务字段 | 角色 |\n|------|------|-------------|------|\n| JOURNAL_BASE | OTHER_SYSTEM_NO | VENDOR_CD, LIST_TYPE, CPL_MK, TRANSACTION_AMOUNT | 数据源头/交易",
+      "chunk_purpose": "schema_evidence"
+    },
+    {
+      "source": "PaymentReqServiceImpl.java",
+      "distance": 1.2479243278503418,
+      "text_preview": "## 核心业务规则\n\n### Rule 1: JOURNAL_BASE选入保护\n- 条件: CPL_MK必须为'8'(検收完了)才能被选入对账单\n- 条件: LIST_TYPE必须为'0'(未被选入)才能被选择\n- 保护: 选入后LIST_TYPE→'1',不再出现在查询列表中\n- 释放: 删除对账单时,LIST_TYPE→'0',重新可选\n\n### Rule 2: RECEIVING_LIST锁",
+      "chunk_purpose": "code_evidence"
+    }
+  ],
+  "graph_results_count": 6,
+  "graph_results_preview": [
+    {
+      "entity": {
+        "eid": "ent_data_table_journal_base",
+        "cname": "JOURNAL_BASE",
+        "lbls": [
+          "Table"
+        ]
+      },
+      "neighbor_count": 30,
+      "neighbors_preview": [
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "has_field",
+          "tgt": "CURRENCY_CODE",
+          "tgt_id": "ent_data_column_currency_code",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "contains",
+          "tgt": "CURRENCY_CODE",
+          "tgt_id": "ent_data_column_currency_code",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "has_field",
+          "tgt": "TAX_RATE",
+          "tgt_id": "ent_data_column_tax_rate",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "contains",
+          "tgt": "TAX_RATE",
+          "tgt_id": "ent_data_column_tax_rate",
+          "tgt_labels": [
+            "Column"
+          ]
+        },
+        {
+          "src": "JOURNAL_BASE",
+          "rel": "has_field",
+          "tgt": "ALLOCATION_MARKER",
+          "tgt_id": "ent_data_column_allocation_marker",
+          "tgt_labels": [
+            "Column"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_system_class_idx_journal_base_vendor",
+        "cname": "IDX_JOURNAL_BASE_VENDOR",
+        "lbls": [
+          "Class"
+        ]
+      },
+      "neighbor_count": 0,
+      "neighbors_preview": []
+    },
+    {
+      "entity": {
+        "eid": "ent_data_table_idx_journal_base_vendor",
+        "cname": "IDX_JOURNAL_BASE_VENDOR",
+        "lbls": [
+          "Table"
+        ]
+      },
+      "neighbor_count": 0,
+      "neighbors_preview": []
+    },
+    {
+      "entity": {
+        "eid": "ent_system_class_receiving_journal",
+        "cname": "ReceivingJournal",
+        "lbls": [
+          "Class"
+        ]
+      },
+      "neighbor_count": 1,
+      "neighbors_preview": [
+        {
+          "src": "ReceivingJournal",
+          "rel": "maps_to",
+          "tgt": "RECEIVING_JOURNAL",
+          "tgt_id": "ent_data_table_receiving_journal",
+          "tgt_labels": [
+            "Table"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_system_class_journal_base",
+        "cname": "JournalBase",
+        "lbls": [
+          "Class"
+        ]
+      },
+      "neighbor_count": 1,
+      "neighbors_preview": [
+        {
+          "src": "JournalBase",
+          "rel": "maps_to",
+          "tgt": "JOURNAL_BASE",
+          "tgt_id": "ent_data_table_journal_base",
+          "tgt_labels": [
+            "Table"
+          ]
+        }
+      ]
+    },
+    {
+      "entity": {
+        "eid": "ent_system_action_journal_base_action",
+        "cname": "JournalBaseAction",
+        "lbls": [
+          "Action"
+        ]
+      },
+      "neighbor_count": 14,
+      "neighbors_preview": [
+        {
+          "src": "JournalBaseAction",
+          "rel": "contains",
+          "tgt": "findReceigIngByParam",
+          "tgt_id": "ent_system_method_find_receig_ing_by_param",
+          "tgt_labels": [
+            "Method"
+          ]
+        },
+        {
+          "src": "JournalBaseAction",
+          "rel": "contains",
+          "tgt": "registReceiving",
+          "tgt_id": "ent_system_method_regist_receiving",
+          "tgt_labels": [
+            "Method"
+          ]
+        },
+        {
+          "src": "JournalBaseAction",
+          "rel": "reads_from",
+          "tgt": "MDWS1.MR0016",
+          "tgt_id": "ent_data_table_mdws1_mr0016",
+          "tgt_labels": [
+            "Table"
+          ]
+        },
+        {
+          "src": "JournalBaseAction",
+          "rel": "reads_from",
+          "tgt": "JOURNAL_BASE",
+          "tgt_id": "ent_data_table_journal_base",
+          "tgt_labels": [
+            "Table"
+          ]
+        },
+        {
+          "src": "JournalBaseAction",
+          "rel": "reads_from",
+          "tgt": "V_BASE_LIST_JOURNAL",
+          "tgt_id": "ent_data_view_v_base_list_journal",
+          "tgt_labels": [
+            "View"
+          ]
+        }
+      ]
+    }
+  ],
+  "vec_context_length": 13421,
+  "graph_context_length": 2181,
+  "config": {
+    "run_id": "murata_rebuild_v1",
+    "dataset": "murata",
+    "collection": "murata_e2e_murata_rebuild_v1",
+    "top_k": 10,
+    "graph_depth": 2,
+    "max_graph_edges": 30,
+    "view": "full",
+    "lang": "zh"
+  }
+}

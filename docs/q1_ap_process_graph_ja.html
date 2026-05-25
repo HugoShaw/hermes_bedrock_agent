@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html><head>
+<title>Murata GraphRAG — 応付管理</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+body { margin: 0; padding: 20px; background: #1a1a2e; color: #eee; font-family: sans-serif; }
+h1 { text-align: center; color: #4fc3f7; }
+#graph { width: 100%; height: 80vh; border: 1px solid #333; border-radius: 8px; }
+.legend { display: flex; gap: 20px; justify-content: center; margin: 10px; }
+.legend span { padding: 4px 12px; border-radius: 4px; font-size: 12px; }
+</style>
+</head><body>
+<h1>Murata GraphRAG — 応付管理</h1>
+<div class="legend">
+  <span style="background:#4fc3f7;color:#000">Table</span>
+  <span style="background:#81c784;color:#000">Process</span>
+  <span style="background:#ffb74d;color:#000">External</span>
+  <span style="background:#ce93d8;color:#000">Other</span>
+</div>
+<div id="graph"></div>
+<script>
+var nodes = new vis.DataSet([{"id": "ent_business_business_process_応付管理流程", "label": "応付管理流程", "color": "#81c784"}, {"id": "ent_business_business_step_gl记账", "label": "GL记账", "color": "#ce93d8"}, {"id": "ent_business_business_step_报表输出", "label": "报表输出", "color": "#ce93d8"}, {"id": "ent_business_business_step_対账单生成", "label": "対账单生成", "color": "#ce93d8"}, {"id": "ent_business_business_step_付款申请创建", "label": "付款申请创建", "color": "#ce93d8"}, {"id": "ent_business_business_step_外部数据导入", "label": "外部数据导入", "color": "#ce93d8"}, {"id": "ent_business_business_step_审批流程", "label": "审批流程", "color": "#ce93d8"}, {"id": "ent_system_system_応付管理システム", "label": "応付管理システム", "color": "#ce93d8"}, {"id": "ent_system_system_i_maps", "label": "iMaps", "color": "#ce93d8"}, {"id": "ent_system_external_system_ms系统", "label": "MS系统", "color": "#ffb74d"}, {"id": "ent_system_external_system_sun_erp", "label": "SUN ERP", "color": "#ffb74d"}, {"id": "ent_business_business_process_完整業務流程", "label": "完整業務流程", "color": "#81c784"}]);
+var edges = new vis.DataSet([{"from": "ent_business_business_process_応付管理流程", "to": "ent_business_business_step_gl记账", "label": "contains", "arrows": "to"}, {"from": "ent_business_business_process_応付管理流程", "to": "ent_business_business_step_报表输出", "label": "contains", "arrows": "to"}, {"from": "ent_business_business_process_応付管理流程", "to": "ent_business_business_step_対账单生成", "label": "contains", "arrows": "to"}, {"from": "ent_business_business_process_応付管理流程", "to": "ent_business_business_step_付款申请创建", "label": "contains", "arrows": "to"}, {"from": "ent_business_business_process_応付管理流程", "to": "ent_business_business_step_外部数据导入", "label": "contains", "arrows": "to"}, {"from": "ent_business_business_process_応付管理流程", "to": "ent_business_business_step_审批流程", "label": "contains", "arrows": "to"}, {"from": "ent_system_system_応付管理システム", "to": "ent_system_system_i_maps", "label": "belongs_to", "arrows": "to"}, {"from": "ent_system_system_応付管理システム", "to": "ent_system_external_system_ms系统", "label": "depends_on", "arrows": "to"}, {"from": "ent_system_system_応付管理システム", "to": "ent_system_external_system_sun_erp", "label": "depends_on", "arrows": "to"}, {"from": "ent_system_system_応付管理システム", "to": "ent_business_business_process_完整業務流程", "label": "supports", "arrows": "to"}]);
+var container = document.getElementById('graph');
+var data = { nodes: nodes, edges: edges };
+var options = {
+  nodes: { shape: 'box', font: { size: 14, color: '#fff' }, borderWidth: 2 },
+  edges: { font: { size: 10, color: '#aaa' }, color: '#666' },
+  physics: { solver: 'forceAtlas2Based', stabilization: { iterations: 100 } },
+  layout: { improvedLayout: true }
+};
+new vis.Network(container, data, options);
+</script>
+</body></html>
