@@ -74,8 +74,9 @@ Thumbs.db
 *.swo
 *~
 
-# --- Claude task specs (ephemeral session-specific instructions) ---
-.claude_task_*.md
+# --- Agent context files (local-only, never commit) ---
+.hermes.md
+.claude_*.md
 
 # --- Archive (old code, kept locally for reference but NOT tracked in git) ---
 # Contains legacy scripts with hardcoded AWS account IDs, Neptune graph IDs,
