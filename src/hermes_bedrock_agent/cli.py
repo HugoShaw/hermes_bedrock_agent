@@ -144,6 +144,7 @@ def build_kb(
     parsed_dir: Path = typer.Argument(..., help="Path to vlm_parsed/ directory with sheet_NN.md files"),
     workbook_name: str = typer.Option("", "--workbook", "-w", help="Workbook name for metadata"),
     s3_excel_key: str = typer.Option("", "--s3-excel-key", help="S3 key for the source Excel file"),
+    s3_pdf_prefix: str = typer.Option("", "--s3-pdf-prefix", help="S3 prefix for PDF evidence (defaults to outputs/<dir>/pdf)"),
     output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory for chunks.jsonl"),
     project_id: Optional[str] = typer.Option(None, "--project-id", help="Project ID for multi-project isolation"),
     skip_vector: bool = typer.Option(False, "--skip-vector", help="Skip LanceDB embedding"),
@@ -175,6 +176,12 @@ def build_kb(
     # Detect sheet_name_mapping.csv
     mapping_csv = parsed_path.parent / "sheet_name_mapping.csv"
 
+    # Derive s3_pdf_prefix from directory structure if not explicitly set
+    # The PDF files live as siblings to vlm_parsed/ under the same parent dir
+    dir_name = parsed_path.parent.name  # e.g. "reparse_wb2"
+    effective_pdf_prefix = s3_pdf_prefix or f"outputs/{dir_name}/pdf"
+    effective_vlm_prefix = f"outputs/{dir_name}/vlm_parsed"
+
     logger.info("Step 1: Building dataset from %s", parsed_path)
     effective_project_id = project_id or ""
     if not effective_project_id:
@@ -184,8 +191,8 @@ def build_kb(
         sheet_name_mapping_csv=mapping_csv if mapping_csv.exists() else None,
         workbook_name=wb_name,
         s3_bucket=config.s3_bucket,
-        s3_pdf_prefix=f"outputs/{wb_name}/pdf",
-        s3_vlm_prefix=f"outputs/{wb_name}/vlm_parsed",
+        s3_pdf_prefix=effective_pdf_prefix,
+        s3_vlm_prefix=effective_vlm_prefix,
         s3_excel_key=s3_excel_key,
         output_path=chunks_jsonl,
         project_id=effective_project_id,

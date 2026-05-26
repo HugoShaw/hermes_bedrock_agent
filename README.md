@@ -180,7 +180,7 @@ hermes_bedrock_agent/
 S3 上の Excel ファイル
     ↓  hermes parse --s3-prefix ...
 ローカルにダウンロード → PDF 変換 → PNG レンダリング → VLM 解析 → Markdown
-    ↓  hermes build-kb outputs/run_XXX/workbook_name/vlm_parsed/
+    ↓  hermes build-kb outputs/reparse_wb2/vlm_parsed/
 チャンク分割 → Titan Embed V2 → LanceDB 格納 + Neptune グラフ構築
     ↓  hermes qa
 インタラクティブ QA ターミナル (retrieve / answer / graph モード)
@@ -291,17 +291,22 @@ uv run python -m hermes_bedrock_agent.cli parse \
 ### 5.4 Dual-RAG Knowledge Base の構築
 
 ```bash
+# 基本コマンド（既存の parsed Markdown から KB 構築）:
 uv run python -m hermes_bedrock_agent.cli build-kb \
-  outputs/run_XXX/workbook_name/vlm_parsed/ \
-  --workbook "IFマッピング定義書" \
-  --s3-excel-key "output/murata/document.xlsx"
+  outputs/reparse_wb2/vlm_parsed/ \
+  --workbook "MW_IFマッピング定義書_205_発注情報(登録・変更・取消)" \
+  --s3-excel-key "サンプル20260519/MW_IFマッピング定義書_205_発注情報(登録・変更・取消).xlsx" \
+  --project-id "murata_205_order"
 ```
+
+> **注意:** `--project-id` を省略すると警告が表示され、全プロジェクトの既存データが上書きされる可能性があります。
+> PDF パスは `outputs/<parsed_dir_parent>/pdf/` から自動導出されます。必要に応じて `--s3-pdf-prefix` で上書き可能です。
 
 **Neptune グラフをスキップ (ベクトルDB のみ):**
 
 ```bash
 uv run python -m hermes_bedrock_agent.cli build-kb \
-  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  outputs/reparse_wb2/vlm_parsed/ \
   --skip-graph
 ```
 
@@ -309,7 +314,7 @@ uv run python -m hermes_bedrock_agent.cli build-kb \
 
 ```bash
 uv run python -m hermes_bedrock_agent.cli build-kb \
-  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  outputs/reparse_wb2/vlm_parsed/ \
   --dry-run-graph
 ```
 
@@ -318,13 +323,13 @@ uv run python -m hermes_bedrock_agent.cli build-kb \
 ```bash
 # 2パス LLM 抽出: Business + Implementation Graph
 uv run python -m hermes_bedrock_agent.cli build-kb \
-  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  outputs/reparse_wb2/vlm_parsed/ \
   --use-llm-graph \
   --graph-delay 3.0
 
 # Dry-run で結果確認後、Neptune に書き込み
 uv run python -m hermes_bedrock_agent.cli build-kb \
-  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  outputs/reparse_wb2/vlm_parsed/ \
   --use-llm-graph --dry-run-graph
 ```
 
@@ -404,7 +409,7 @@ uv run python -m hermes_bedrock_agent.cli qa
 
 ```bash
 uv run python -m hermes_bedrock_agent.cli qa \
-  --catalog-dir outputs/run_XXX/workbook_name/
+  --catalog-dir outputs/reparse_wb2/
 ```
 
 **ワンショットクエリ:**
@@ -460,12 +465,12 @@ uv run python scripts/demo_qa_evidence_flow.py --help
 
 **解析サマリー:**
 ```bash
-cat outputs/run_XXX/parse_summary.json
+cat outputs/reparse_wb2/parse_summary.json
 ```
 
 **KB 構築サマリー:**
 ```bash
-cat outputs/run_XXX/workbook_name/dual_rag/kb_summary.json
+cat outputs/reparse_wb2/dual_rag/kb_summary.json
 ```
 
 **詳細ログの有効化:**
@@ -475,7 +480,7 @@ uv run python -m hermes_bedrock_agent.cli parse --file doc.xlsx --log-level DEBU
 
 **チャンク JSONL の確認:**
 ```bash
-head -5 outputs/run_XXX/workbook_name/dual_rag/chunks.jsonl | python -m json.tool
+head -5 outputs/reparse_wb2/dual_rag/chunks.jsonl | python -m json.tool
 ```
 
 ## 6. 重要な注意事項
@@ -568,7 +573,7 @@ uv run python -m hermes_bedrock_agent.cli parse \
 
 # 2. 解析済み Markdown から KB 構築（プロジェクト限定）
 uv run python -m hermes_bedrock_agent.cli build-kb \
-  outputs/murata_205_order/run_XXX/wb_name/vlm_parsed/ \
+  outputs/reparse_wb2/vlm_parsed/ \
   --project-id "murata_205_order" \
   --use-llm-graph
 
