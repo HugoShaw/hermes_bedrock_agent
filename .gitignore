@@ -47,42 +47,6 @@ iam_*.json
 iam_neptune_data_policy.json
 NEPTUNE_FIX_GUIDE.md
 
-# Scripts with hardcoded AWS infra IDs (Neptune endpoints, account numbers)
-scripts/neptune_gremlin_writer.py
-scripts/neptune_full_import.py
-scripts/neptune_sample_import.py
-scripts/neptune_writer.py
-scripts/export_mermaid.py
-scripts/qa_terminal_demo.py
-scripts/qa_terminal.py
-scripts/query_demo.py
-scripts/run_e2e_murata_pipeline.py
-scripts/run_qa_demo_batch.py
-scripts/validate_i18n_retrieval.py
-scripts/validate_phase10b2_hybrid.py
-scripts/phase94_retrieval_viz.py
-archive/src_v1_and_v2/v2/pipelines/export_excel_graph_html.py
-tests/test_qa_terminal.py
-
-# Docs containing Neptune/AWS account references
-docs/e2e_murata_test.md
-docs/demo_outputs/demo_summary.md
-docs/murata_rebuild_r7_neptune_preview_report.md
-docs/murata_rebuild_r8_neptune_dryrun_report.md
-docs/murata_rebuild_r9_neptune_connectivity_report.md
-docs/murata_rebuild_r9_neptune_sample_import_report.md
-docs/murata_rebuild_r10_connectivity_report.md
-docs/murata_rebuild_r10_full_import_report.md
-docs/murata_rebuild_r11_hybrid_retrieval_report.md
-docs/murata_rebuild_r12_qa_terminal_usage.md
-docs/prompts/phase_r8_neptune_dryrun_preview.md
-docs/prompts/phase_r9_neptune_sample_import_validation.md
-docs/prompts/phase_r10_neptune_full_import_validation.md
-docs/prompts/phase_r11_hybrid_retrieval_qa_validation.md
-docs/prompts/phase_r12_qa_terminal_demo_packaging.md
-docs/refactor_scan_report.md
-docs/task_state.md
-
 # --- Configs (may contain endpoints, IDs, credentials) ---
 configs/
 
@@ -113,8 +77,58 @@ Thumbs.db
 # --- Claude task specs (ephemeral session-specific instructions) ---
 .claude_task_*.md
 
-# --- Archive (old code, kept for reference but not tracked) ---
-# archive/ is committed so old code is preserved in git history
+# --- Archive (old code, kept locally for reference but NOT tracked in git) ---
+# Contains legacy scripts with hardcoded AWS account IDs, Neptune graph IDs,
+# security group IDs, and other sensitive infrastructure identifiers.
+# These files are preserved on disk for reference but MUST NOT be committed.
+archive/
+
+# --- Legacy tests (import modules that no longer exist in refactored src/) ---
+tests/test_answer_generator.py
+tests/test_api_routes.py
+tests/test_bedrock_kb_retriever.py
+tests/test_chunking.py
+tests/test_clients.py
+tests/test_config.py
+tests/test_context_builder.py
+tests/test_dry_run.py
+tests/test_embedding.py
+tests/test_entity_normalizer.py
+tests/test_file_router.py
+tests/test_fusion.py
+tests/test_graph_extraction.py
+tests/test_graph_quality_review.py
+tests/test_graph_retriever.py
+tests/test_graph_schema.py
+tests/test_graph_validator.py
+tests/test_graphrag.py
+tests/test_i18n_enricher_live.py
+tests/test_i18n_enrichment.py
+tests/test_ingestion.py
+tests/test_intent_router.py
+tests/test_kb_client.py
+tests/test_knowledge_store.py
+tests/test_lancedb_store.py
+tests/test_mermaid_generator.py
+tests/test_mermaid_renderer.py
+tests/test_models.py
+tests/test_neptune_loader.py
+tests/test_opensearch_loader.py
+tests/test_parsers.py
+tests/test_query_entity_extractor.py
+tests/test_reactflow_exporter.py
+tests/test_schemas.py
+tests/test_schemas_new.py
+tests/test_settings.py
+tests/test_subgraph_query.py
+tests/test_svg_renderer.py
+tests/test_text_retriever.py
+tests/test_text_retriever_vector_store.py
+tests/test_utils.py
+tests/test_vector_store_base.py
+tests/test_visualization_i18n_labels.py
+tests/test_vlm_parser_mock.py
+tests/test_e2e_murata_pipeline.py
 
 # --- Garbage files (accidental shell output) ---
 4d}x{s[max_column]:
