@@ -61,7 +61,7 @@ scripts/run_qa_demo_batch.py
 scripts/validate_i18n_retrieval.py
 scripts/validate_phase10b2_hybrid.py
 scripts/phase94_retrieval_viz.py
-src/hermes_bedrock_agent/v2/pipelines/export_excel_graph_html.py
+archive/src_v1_and_v2/v2/pipelines/export_excel_graph_html.py
 tests/test_qa_terminal.py
 
 # Docs containing Neptune/AWS account references
@@ -112,6 +112,9 @@ Thumbs.db
 
 # --- Claude task specs (ephemeral session-specific instructions) ---
 .claude_task_*.md
+
+# --- Archive (old code, kept for reference but not tracked) ---
+# archive/ is committed so old code is preserved in git history
 
 # --- Garbage files (accidental shell output) ---
 4d}x{s[max_column]:

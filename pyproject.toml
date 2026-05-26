@@ -1,7 +1,7 @@
 [project]
 name = "hermes_bedrock_agent"
-version = "0.3.0"
-description = "Enterprise Hybrid GraphRAG — S3 ingestion, multimodal parsing, Neptune graph, OpenSearch retrieval, Bedrock generation"
+version = "1.0.0"
+description = "Enterprise document parsing + dual-RAG pipeline: S3 → Excel/PDF → VLM markdown → LanceDB + Neptune → QA"
 requires-python = ">=3.11"
 dependencies = [
   "boto3",
@@ -9,33 +9,19 @@ dependencies = [
   "python-dotenv",
   "typer",
   "rich",
-  "httpx",
-  "tenacity",
   "pydantic>=2.0",
-  "pydantic-settings>=2.0",
-  "pyyaml",
-  "hermes-agent",
-  "pypdf>=4.0",
-  "python-docx>=1.1",
-  "numpy>=1.26",
-  "gremlinpython>=3.8.1",
-  "networkx>=3.6.1",
-  "pdfminer-six>=20260107",
-  "openpyxl>=3.1.5",
-  "xlrd>=2.0.2",
-  "python-pptx>=1.0.2",
   "Pillow>=10.0",
+  "lancedb>=0.20",
+  "pyarrow",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "pytest-mock"]
-llama = ["llama-index>=0.10"]
-search = ["opensearch-py>=2.4"]
-api = ["fastapi>=0.110", "uvicorn>=0.27"]
-local-vector = ["lancedb>=0.20"]
+pdf = ["pdf2image", "pypdf>=4.0"]
+graph = ["gremlinpython>=3.8.1"]
 
 [project.scripts]
-hermes_bedrock_agent = "hermes_bedrock_agent.main:app"
+hermes = "hermes_bedrock_agent.cli:main"
 
 [build-system]
 requires = ["hatchling"]

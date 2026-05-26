@@ -1,3 +1,3 @@
-"""hermes_bedrock_agent - Enterprise AI platform for Bedrock KB, S3 ETL, Neptune GraphRAG."""
+"""hermes_bedrock_agent — S3 document parsing, dual-RAG knowledge base, QA terminal."""
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"
