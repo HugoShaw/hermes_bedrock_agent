@@ -338,24 +338,42 @@ uv run python -m hermes_bedrock_agent.cli build-kb \
 **LLM グラフ抽出の仕組み:**
 
 ```
-Parsed Markdown (.md)
+Parsed Markdown (.md) + cross_sheet_summary.md (workbook-level context)
     │
     ├─ Pass 1: Business Semantic Graph (シート単位 × 1 LLM call)
+    │    Context: workbook概要 + シート全文 (最大12K chars)
     │    → System nodes (SAP, DataSpider, ANDPAD)
+    │    → InterfaceSpec nodes (IF-ID, 仕様定義)
     │    → DataFlow nodes (発注データ連携, 発注ヘッダ情報)
     │    → BusinessProcess nodes (発注情報登録, 税込額算出)
-    │    → Edges: FLOWS_TO, TRIGGERS, PRODUCES, USES
+    │    → API nodes (【Send】発注作成, 発注一覧取得)
+    │    → Edges: SENDS_DATA_TO, CALLS_API, TRIGGERS, PRODUCES, PART_OF
     │
-    ├─ Pass 2: Implementation Graph (チャンク単位 × N LLM calls)
-    │    → API nodes (【Send】発注作成)
-    │    → Field nodes (購買発注番号, 発注管理ID)
-    │    → MappingRule nodes (購買発注番号→発注管理ID変換)
-    │    → BusinessRule nodes (条件, バリデーション)
-    │    → Table nodes (SAP発注情報ファイル)
-    │    → Edges: MAPS_TO, HAS_FIELD, CALLS_API, HAS_CONDITION
+    ├─ Pass 2: Implementation / Evidence Graph (チャンク単位 × N LLM calls)
+    │    Context: チャンク全文 (最大12K chars, フィールドマッピング含む)
+    │    → SourceTable / TargetTable nodes (SAP→ANDPAD テーブル構造)
+    │    → SourceField / TargetField nodes (項目レベル定義)
+    │    → MappingRule nodes (変換ロジック: CONV-001, CONV-002...)
+    │    → BusinessRule nodes (条件分岐: 工事区分判定, 税率ゼロ処理)
+    │    → Edges: HAS_FIELD, MAPS_TO, TRANSFORMS_TO, HAS_CONDITION
     │
     └─ All nodes/edges → Neptune MERGE
          (evidence_pdf_s3_path + chunk_id でソース追跡可能)
+```
+
+**マッピングチェーン抽出パターン:**
+
+```
+SourceField (SAP)                          TargetField (ANDPAD)
+  ├── 代表品名 ──── MAPS_TO ──────────────→ 発注名
+  ├── 対向注文番号 ── MAPS_TO ────────────→ 発注管理ID
+  ├── 仕入先確定コード ── TRANSFORMS_TO ──→ [取引先管理ID変換] ── MAPS_TO → 取引先管理ID
+  │   部門コード ─────── TRANSFORMS_TO ──┘         ↓
+  │                                         HAS_CONDITION
+  │                                              ↓
+  └── 工事区分 ──── TRANSFORMS_TO ────────→ [発注種別変換] ── MAPS_TO → 発注種別
+                                                  ↓
+                                           BusinessRule: 工事区分による分岐
 ```
 
 **デモ: LLM グラフ抽出テスト:**
