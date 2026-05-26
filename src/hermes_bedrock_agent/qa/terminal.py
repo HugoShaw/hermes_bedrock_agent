@@ -200,9 +200,14 @@ def _print_dual_graph(dual) -> None:
     _print_graph(dual.implementation, "Implementation Graph", BCYAN)
 
 
-def _print_evidence_flow(chunks, dual_graph, evidence_images, elapsed: float) -> None:
+def _print_evidence_flow(chunks, dual_graph, evidence_images, elapsed: float, project_id: str = "") -> None:
     """Print evidence flow summary showing all sources used."""
     print(_divider("Evidence Flow Summary", "━", BGREEN))
+    # Project scope
+    if project_id:
+        print(f"  {_c('Project scope:', BWHITE)} {_c(project_id, BCYAN)}")
+    else:
+        print(f"  {_c('Project scope:', BWHITE)} {_c('(ALL projects — no filter)', YELLOW)}")
     # Markdown chunks
     sheet_set = sorted({c.sheet_index for c in chunks if c.sheet_index > 0})
     print(f"  {_c('① Markdown chunks:', BWHITE)} {len(chunks)} chunks from sheets {sheet_set}")
@@ -371,7 +376,7 @@ def _run_answer(query: str, s: _Session) -> None:
         t3 = t2
 
     # Print evidence flow summary
-    _print_evidence_flow(chunks, dual_graph, evidence_images, t3 - t0)
+    _print_evidence_flow(chunks, dual_graph, evidence_images, t3 - t0, project_id=s.project_id)
 
     # Step 4: Multimodal VLM answer generation with full evidence pack
     with _Spinner("Generating grounded answer (VLM)…"):
@@ -533,6 +538,10 @@ def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "") -> No
     os.system("clear")
     _print_header(session, collection, model_id)
     print()
+    if not project_id:
+        print(_c("  ⚠ WARNING: No --project-id set. Retrieval will search across ALL projects.", YELLOW))
+        print(_c("    Use @project <id> to scope to a specific project.", YELLOW))
+        print()
     print(_c("  Type a question to query, /help for commands, /quit to exit.", DIM))
     print()
 

@@ -19,6 +19,12 @@ app = typer.Typer(
 )
 console = Console()
 
+_NO_PROJECT_WARNING = (
+    "[yellow]⚠ WARNING:[/yellow] --project-id not set. "
+    "Operations may affect or search across ALL projects in the knowledge base. "
+    "Use --project-id to scope to a single project."
+)
+
 
 def _setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(
@@ -63,6 +69,8 @@ def parse(
     effective_project_id = project_id or ""
     if not effective_project_id and s3_prefix:
         effective_project_id = _derive_project_id(s3_prefix)
+    if not effective_project_id:
+        console.print(_NO_PROJECT_WARNING)
 
     from .config import config
     from .parsing.excel_parser import convert_excel_to_pdfs
@@ -169,6 +177,8 @@ def build_kb(
 
     logger.info("Step 1: Building dataset from %s", parsed_path)
     effective_project_id = project_id or ""
+    if not effective_project_id:
+        console.print(_NO_PROJECT_WARNING)
     chunks = build_chunks(
         vlm_parsed_dir=parsed_path,
         sheet_name_mapping_csv=mapping_csv if mapping_csv.exists() else None,
@@ -237,6 +247,8 @@ def qa(
     _setup_logging(log_level)
 
     effective_project_id = project_id or ""
+    if not effective_project_id:
+        console.print(_NO_PROJECT_WARNING)
     if query:
         # One-shot mode
         from .retrieval.query_router import answer as do_answer, retrieve, format_response

@@ -80,8 +80,18 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
     seen_edges: set[tuple] = set()
     nodes: list[dict] = []
     edges: list[dict] = []
-    pid_filter = f" AND n.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
-    pid_filter_a = f" AND a.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
+
+    if not project_id:
+        logger.warning("_fetch_business_graph: no project_id — graph query may return cross-project data")
+
+    # Build project_id filter fragments for different variable names
+    # Using parameterized-style string injection (safe because project_id comes from CLI, not user input in queries)
+    pid_esc = project_id.replace("'", "''") if project_id else ""
+    pid_a = f" AND a.project_id = '{pid_esc}'" if project_id else ""
+    pid_b = f" AND b.project_id = '{pid_esc}'" if project_id else ""
+    pid_s = f" AND s.project_id = '{pid_esc}'" if project_id else ""
+    pid_n = f" AND n.project_id = '{pid_esc}'" if project_id else ""
+    pid_m = f" AND m.project_id = '{pid_esc}'" if project_id else ""
 
     def _add_node(nd: dict) -> None:
         nid = nd["id"]
@@ -98,10 +108,10 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
                 edge["properties"] = props
             edges.append(edge)
 
-    # Strategy A: System-level data flows
+    # Strategy A: System-level data flows (BOTH nodes filtered)
     try:
         rows = client.execute_query(
-            f"MATCH (a:System)-[r:FLOWS_TO]->(b:System) WHERE 1=1{pid_filter_a} RETURN a, type(r) AS rel, b LIMIT 30"
+            f"MATCH (a:System)-[r:FLOWS_TO]->(b:System) WHERE 1=1{pid_a}{pid_b} RETURN a, type(r) AS rel, b LIMIT 30"
         ).get("results", [])
         for row in rows:
             a_nd = _node_from_row(row.get("a", {}))
@@ -113,14 +123,13 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
     except Exception as exc:
         logger.debug("Business graph Strategy A failed: %s", exc)
 
-    # Strategy B: Sheet-level neighbourhood (high-level structure)
+    # Strategy B: Sheet-level neighbourhood (BOTH sheet and neighbor filtered)
     sheet_indices = list({c.sheet_index for c in chunks if c.sheet_index > 0})[:5]
     if sheet_indices:
         idx_list = ", ".join(str(i) for i in sheet_indices)
-        pid_sheet = f" AND s.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
         try:
             rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_sheet} "
+                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_s}{pid_n} "
                 f"AND (n:System OR n:DataFlow OR n:Sheet) "
                 f"RETURN s, type(r) AS rel, n LIMIT 50"
             ).get("results", [])
@@ -134,7 +143,7 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
         except Exception as exc:
             logger.debug("Business graph Strategy B failed: %s", exc)
 
-    # Strategy C: Entity-name search (system-level only)
+    # Strategy C: Entity-name search (BOTH starting node and neighbor filtered)
     chunk_texts = [c.content for c in chunks]
     if query:
         chunk_texts.append(query)
@@ -142,8 +151,8 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
         safe = name.replace("'", "\\'")
         try:
             rows = client.execute_query(
-                f"MATCH (n:System) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_filter} "
-                f"WITH n LIMIT 3 MATCH (n)-[r]-(m) WHERE m:System OR m:DataFlow "
+                f"MATCH (n:System) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_n} "
+                f"WITH n LIMIT 3 MATCH (n)-[r]-(m) WHERE (m:System OR m:DataFlow){pid_m} "
                 f"RETURN n, type(r) AS rel, m LIMIT 20"
             ).get("results", [])
             for row in rows:
@@ -165,7 +174,17 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
     seen_edges: set[tuple] = set()
     nodes: list[dict] = []
     edges: list[dict] = []
-    pid_filter = f" AND n.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
+
+    if not project_id:
+        logger.warning("_fetch_implementation_graph: no project_id — graph query may return cross-project data")
+
+    # Build project_id filter fragments for different variable names
+    pid_esc = project_id.replace("'", "''") if project_id else ""
+    pid_s = f" AND s.project_id = '{pid_esc}'" if project_id else ""
+    pid_n = f" AND n.project_id = '{pid_esc}'" if project_id else ""
+    pid_m = f" AND m.project_id = '{pid_esc}'" if project_id else ""
+    pid_r = f" AND r.project_id = '{pid_esc}'" if project_id else ""
+    pid_c = f" AND c.project_id = '{pid_esc}'" if project_id else ""
 
     def _add_node(nd: dict) -> None:
         nid = nd["id"]
@@ -182,14 +201,13 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
                 edge["properties"] = props
             edges.append(edge)
 
-    # Strategy A: Sheet→API, Sheet→Field, Sheet→Rule relationships
+    # Strategy A: Sheet→API, Sheet→Field, Sheet→Rule (BOTH nodes filtered)
     sheet_indices = list({c.sheet_index for c in chunks if c.sheet_index > 0})[:5]
     if sheet_indices:
         idx_list = ", ".join(str(i) for i in sheet_indices)
-        pid_sheet = f" AND s.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
         try:
             rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_sheet} "
+                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_s}{pid_n} "
                 f"AND (n:API OR n:Field OR n:MappingRule OR n:BusinessRule) "
                 f"RETURN s, type(r) AS rel, n LIMIT 60"
             ).get("results", [])
@@ -203,7 +221,7 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
         except Exception as exc:
             logger.debug("Implementation graph Strategy A failed: %s", exc)
 
-    # Strategy B: API / Field entity-name search
+    # Strategy B: API / Field entity-name search (BOTH starting node and neighbor filtered)
     chunk_texts = [c.content for c in chunks]
     if query:
         chunk_texts.append(query)
@@ -211,9 +229,9 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
         safe = name.replace("'", "\\'")
         try:
             rows = client.execute_query(
-                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_filter} "
+                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_n} "
                 f"AND (n:API OR n:Field OR n:MappingRule OR n:BusinessRule) "
-                f"WITH n LIMIT 5 MATCH (n)-[r]-(m) RETURN n, type(r) AS rel, m LIMIT 30"
+                f"WITH n LIMIT 5 MATCH (n)-[r]-(m) WHERE 1=1{pid_m} RETURN n, type(r) AS rel, m LIMIT 30"
             ).get("results", [])
             for row in rows:
                 n_nd = _node_from_row(row.get("n", {}))
@@ -225,12 +243,11 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
         except Exception:
             continue
 
-    # Strategy C: Mapping rules with conditions
+    # Strategy C: Mapping rules with conditions (BOTH nodes filtered)
     if any(c.chunk_type in ("mapping_table", "data_condition", "business_rule") for c in chunks):
-        pid_rule = f" AND r.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
         try:
             rows = client.execute_query(
-                f"MATCH (r:MappingRule)-[rel:HAS_CONDITION]->(c:BusinessRule) WHERE 1=1{pid_rule} "
+                f"MATCH (r:MappingRule)-[rel:HAS_CONDITION]->(c:BusinessRule) WHERE 1=1{pid_r}{pid_c} "
                 f"RETURN r, type(rel) AS rel_type, c LIMIT 20"
             ).get("results", [])
             for row in rows:
@@ -251,13 +268,21 @@ def fetch_dual_graph_context(
     query: str = "",
     project_id: str = "",
 ) -> Optional[DualGraphContext]:
-    """Retrieve two-layer graph context: business semantic + implementation."""
+    """Retrieve two-layer graph context: business semantic + implementation.
+    
+    WARNING: If project_id is empty, graph queries will traverse ALL projects.
+    """
     try:
         from ..clients.neptune import NeptuneClient
 
         client = NeptuneClient()
         if not client.is_configured:
             return None
+
+        if not project_id:
+            logger.warning(
+                "fetch_dual_graph_context: no project_id — graph retrieval may return cross-project data"
+            )
 
         dual = DualGraphContext()
         dual.business = _fetch_business_graph(client, chunks, query, project_id=project_id)

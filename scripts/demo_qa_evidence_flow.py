@@ -58,10 +58,13 @@ def main():
 
     print(_divider("QA Evidence Flow Demo"))
     print(f"  Query: {args.query}")
+    print(f"  Project: {args.project_id or '(ALL — no filter)'}")
     print(f"  Top-K: {args.top_k}")
     print(f"  LanceDB: {config.lancedb_path} / {config.vector_collection}")
     print(f"  Neptune: {config.neptune_graph_id or '(not configured)'}")
     print(f"  VLM Model: {config.vlm_model_id}")
+    if not args.project_id:
+        print(f"\n  ⚠ WARNING: --project-id not set. Retrieval may return cross-project results.")
 
     # ────────────────────────────────────────────────────────────────────
     # Step 1: Markdown chunk retrieval

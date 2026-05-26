@@ -593,6 +593,9 @@ uv run python -m hermes_bedrock_agent.cli qa \
 ### 検証手順
 
 ```bash
+# プロジェクト分離の自動テスト（MERGE キー、エッジフィルタ、ベクトル分離）:
+uv run python scripts/verify_project_isolation.py
+
 # プロジェクト分離が正しく動作していることの確認:
 uv run python scripts/demo_qa_evidence_flow.py \
   --project-id "murata_205_order" \
@@ -604,7 +607,25 @@ uv run python scripts/demo_qa_evidence_flow.py \
   --project-id "nonexistent" \
   --no-answer "発注データ"
 # → 0 results
+
+# project_id 未指定時の警告表示確認:
+uv run python -m hermes_bedrock_agent.cli qa
+# → "⚠ WARNING: --project-id not set..." と表示される
 ```
+
+### プロジェクト分離の保証
+
+以下の層でプロジェクト分離が保証されています:
+
+| 層 | 保護メカニズム |
+|---|---|
+| **Neptune MERGE (node)** | `MERGE (n:Label {node_id: '...', project_id: '...'})` — 同じ node_id でも project_id が異なれば別ノード |
+| **Neptune MERGE (edge)** | MATCH 時に from/to 両端点を `project_id` でフィルタ — 異なるプロジェクトのノード間にエッジ不可 |
+| **Neptune 検索** | 全ての近傍探索クエリで `AND n.project_id = '...'` / `AND m.project_id = '...'` |
+| **LanceDB 検索** | `WHERE project_id = '...'` プレフィルタで他プロジェクトのチャンクを除外 |
+| **LanceDB 構築** | `--project-id` 指定時はそのプロジェクトの行のみ削除→再構築（他プロジェクト無影響）|
+| **CLI 全コマンド** | `--project-id` 未指定時に `⚠ WARNING` を表示 |
+| **QA ターミナル** | 起動時に警告表示 + Evidence Flow Summary にスコープ表示 |
 
 ## 開発
 

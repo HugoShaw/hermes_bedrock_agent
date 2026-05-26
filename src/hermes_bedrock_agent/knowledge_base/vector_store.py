@@ -84,6 +84,12 @@ def load_vector_store(
     db_path = store_path or cfg.lancedb_path
     coll_name = collection or cfg.vector_collection
 
+    if not project_id:
+        logger.warning(
+            "load_vector_store: no project_id — rebuilding entire table. "
+            "All existing project data will be deleted."
+        )
+
     Path(db_path).mkdir(parents=True, exist_ok=True)
     db = lancedb.connect(db_path)
 
@@ -143,6 +149,11 @@ def query_vector_store(
     cfg = cfg or _default_config
     db_path = store_path or cfg.lancedb_path
     coll_name = collection or cfg.vector_collection
+
+    if not project_id:
+        logger.warning(
+            "query_vector_store: no project_id set — retrieval will search across ALL projects"
+        )
 
     db = lancedb.connect(db_path)
     if coll_name not in db.table_names():

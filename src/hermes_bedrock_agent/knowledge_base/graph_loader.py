@@ -43,11 +43,21 @@ def _merge_node_cypher(node: GraphNode) -> str:
     props["name"] = node.name
     set_parts = _props_to_cypher_set(props, "n")
     name_esc = node.name.replace("\\", "\\\\").replace("'", "\\'")
-    cypher = (
-        f"MERGE (n:{node.label} {{node_id: '{node.node_id}'}}) "
-        f"ON CREATE SET n.name = '{name_esc}' "
-        f"ON MATCH SET n.name = '{name_esc}' "
-    )
+    # Include project_id in MERGE key to isolate projects in the same graph DB
+    pid = node.properties.get("project_id", "")
+    if pid:
+        pid_esc = pid.replace("'", "\\'")
+        cypher = (
+            f"MERGE (n:{node.label} {{node_id: '{node.node_id}', project_id: '{pid_esc}'}}) "
+            f"ON CREATE SET n.name = '{name_esc}' "
+            f"ON MATCH SET n.name = '{name_esc}' "
+        )
+    else:
+        cypher = (
+            f"MERGE (n:{node.label} {{node_id: '{node.node_id}'}}) "
+            f"ON CREATE SET n.name = '{name_esc}' "
+            f"ON MATCH SET n.name = '{name_esc}' "
+        )
     if set_parts:
         cypher += f"SET {set_parts}"
     return cypher
@@ -59,10 +69,20 @@ def _merge_edge_cypher(edge: GraphEdge) -> str:
     set_parts = _props_to_cypher_set(props, "r")
     from_esc = edge.from_id.replace("'", "\\'")
     to_esc = edge.to_id.replace("'", "\\'")
-    cypher = (
-        f"MATCH (a {{node_id: '{from_esc}'}}), (b {{node_id: '{to_esc}'}}) "
-        f"MERGE (a)-[r:{edge.relationship}]->(b) "
-    )
+    # Filter by project_id on both endpoints to prevent cross-project edges
+    pid = edge.properties.get("project_id", "")
+    if pid:
+        pid_esc = pid.replace("'", "\\'")
+        cypher = (
+            f"MATCH (a {{node_id: '{from_esc}', project_id: '{pid_esc}'}}), "
+            f"(b {{node_id: '{to_esc}', project_id: '{pid_esc}'}}) "
+            f"MERGE (a)-[r:{edge.relationship}]->(b) "
+        )
+    else:
+        cypher = (
+            f"MATCH (a {{node_id: '{from_esc}'}}), (b {{node_id: '{to_esc}'}}) "
+            f"MERGE (a)-[r:{edge.relationship}]->(b) "
+        )
     if set_parts:
         cypher += f"SET {set_parts}"
     return cypher
@@ -132,6 +152,12 @@ def build_graph(
     if not client.is_configured:
         logger.warning("Neptune graph ID not configured — skipping graph build")
         return {"node_count": 0, "edge_count": 0, "error_count": 0}
+
+    if not project_id:
+        logger.warning(
+            "build_graph: no project_id — graph nodes/edges will not have project isolation. "
+            "Nodes with common names (e.g. System_SAP) may collide across projects."
+        )
 
     if use_llm:
         return _build_graph_llm(chunks, client, cfg, dry_run, delay_seconds)
