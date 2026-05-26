@@ -29,25 +29,59 @@
 │  │ (LibreOffice)│  │ (pdftoppm)   │  │ (Claude VLM) │  │ (Markdown)   │   │
 │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘   │
 └───────────────┬─────────────────────────────────────────────────────────────┘
-                │ Stage 2: Markdown → Chunks
+                │ Stage 2: Markdown → Chunks → Dual Knowledge Base
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Knowledge Base Construction                                                 │
 │  ┌────────────────────────────────┐  ┌────────────────────────────────┐    │
 │  │  Vector Store (LanceDB)        │  │  Graph Store (Neptune Analytics)│    │
-│  │  - Titan Embed V2 (1024dim)    │  │  - openCypher MERGE            │    │
-│  │  - Cosine similarity search    │  │  - Entity/Relation extraction  │    │
+│  │  - Titan Embed V2 (1024dim)    │  │  - Business Semantic Graph      │    │
+│  │  - Cosine similarity search    │  │  - Implementation Graph         │    │
 │  └────────────────────────────────┘  └────────────────────────────────┘    │
 └───────────────┬─────────────────────────────────────────────────────────────┘
-                │ Stage 3: Retrieval & Answer Generation
+                │ Stage 3: QA Evidence Flow
                 ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  QA Interactive Terminal                                                      │
-│  - Vector retrieval (Top-K chunks)                                           │
-│  - Graph context retrieval (Neptune)                                         │
-│  - Evidence PDF image loading                                                │
-│  - Multimodal answer generation (text + images + graph → Claude Converse)    │
+│  QA Interactive Terminal — Full Evidence Flow                                 │
+│                                                                              │
+│  User Question                                                               │
+│    → ① Markdown chunk retrieval (LanceDB vector search)                      │
+│    → ② Business Semantic Graph context (Neptune: systems, data flows)        │
+│    → ③ Implementation Graph context (Neptune: APIs, fields, rules)           │
+│    → ④ PDF/PNG evidence resolution (from chunk metadata → local files)       │
+│    → ⑤ Evidence pack → Multimodal VLM → Grounded answer                     │
+│                                                                              │
+│  If Markdown and PDF/PNG are inconsistent → answer flags the discrepancy     │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### QA Evidence Flow (詳細)
+
+```
+User Question: "SAP から ANDPAD への発注データフロー"
+    │
+    ├─① Markdown Chunk Retrieval (LanceDB Top-K)
+    │    → sheet_06 / マッピングシート / mapping_table / score 0.16
+    │    → chunk metadata: source_pdf_s3_path, sheet_index, workbook_name
+    │
+    ├─② Business Semantic Graph (Neptune)
+    │    → System nodes: SAP, DataSpider, ANDPAD
+    │    → Data flow edges: SAP → DataSpider → ANDPAD
+    │    → Sheet relationships
+    │
+    ├─③ Implementation Graph (Neptune)
+    │    → API nodes: 発注作成, 発注変更
+    │    → Field nodes: 発注管理ID, 代表品名, 正味発注価格
+    │    → MappingRule/BusinessRule nodes with conditions
+    │
+    ├─④ PDF/PNG Evidence Resolution
+    │    → chunk.source_pdf_s3_path → local PDF → pdftoppm → PNG bytes
+    │    → Or: pre-rendered images/ directory → full.png
+    │
+    └─⑤ Multimodal VLM Answer Generation
+         → All evidence packed into single Bedrock Converse call
+         → System prompt instructs: use all sources, flag inconsistencies
+         → Grounded answer with sheet citations
 ```
 
 ### Excel VLM 解析フロー (詳細)
@@ -314,7 +348,34 @@ uv run python -m hermes_bedrock_agent.cli qa \
 | `/help` | ヘルプ |
 | `/quit` | 終了 |
 
-### 5.6 出力結果とログの確認
+### 5.6 Evidence Flow デモスクリプト
+
+エビデンスフロー全体をステップごとに確認するためのデモスクリプトです:
+
+```bash
+# 全ステップ実行 (VLM 回答生成含む)
+uv run python scripts/demo_qa_evidence_flow.py "SAP発注データのフロー"
+
+# 検索のみ (VLM 呼び出しなし — 高速テスト用)
+uv run python scripts/demo_qa_evidence_flow.py --no-answer --no-images "発注データ"
+
+# Top-K を 3 に減らして全ステップ実行
+uv run python scripts/demo_qa_evidence_flow.py --top-k 3 "マッピングシート"
+
+# 全オプション表示
+uv run python scripts/demo_qa_evidence_flow.py --help
+```
+
+**出力例:**
+```
+① Markdown Chunk Retrieval:  5 chunks from sheets [6, 7]
+② Business Graph:            6 nodes, 20 edges (SAP, DataSpider, ANDPAD…)
+③ Implementation Graph:      60 nodes, 70 edges (APIs, fields, rules…)
+④ Visual evidence:           2 PDF/PNG page(s)
+⑤ Answer generated in 12.3s  (4,200 in / 900 out tokens)
+```
+
+### 5.7 出力結果とログの確認
 
 **解析サマリー:**
 ```bash

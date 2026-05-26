@@ -167,8 +167,8 @@ def _print_chunks(chunks, verbose: bool = False) -> None:
         print()
 
 
-def _print_graph(gc) -> None:
-    print(_divider("Graph Context", "━", BYELLOW))
+def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW) -> None:
+    print(_divider(title, "━", color))
     if not gc or (not gc.nodes and not gc.edges):
         print(_c("  (No graph context — Neptune not configured)", DIM))
         print()
@@ -185,6 +185,38 @@ def _print_graph(gc) -> None:
         print(f"  {_c('→', CYAN)} {edge.get('from', '?')} --{edge.get('relationship', '?')}--> {edge.get('to', '?')}")
     if len(gc.edges) > 10:
         print(_c(f"    … {len(gc.edges) - 10} more edges", DIM))
+    print()
+
+
+def _print_dual_graph(dual) -> None:
+    """Print two-layer graph context."""
+    if dual is None or dual.is_empty:
+        _print_graph(None)
+        return
+    _print_graph(dual.business, "Business Semantic Graph", BYELLOW)
+    _print_graph(dual.implementation, "Implementation Graph", BCYAN)
+
+
+def _print_evidence_flow(chunks, dual_graph, evidence_images, elapsed: float) -> None:
+    """Print evidence flow summary showing all sources used."""
+    print(_divider("Evidence Flow Summary", "━", BGREEN))
+    # Markdown chunks
+    sheet_set = sorted({c.sheet_index for c in chunks if c.sheet_index > 0})
+    print(f"  {_c('① Markdown chunks:', BWHITE)} {len(chunks)} chunks from sheets {sheet_set}")
+    # Graph context
+    if dual_graph and not dual_graph.is_empty:
+        print(f"  {_c('② Business Graph:', BWHITE)} {len(dual_graph.business.nodes)} nodes, {len(dual_graph.business.edges)} edges")
+        print(f"  {_c('③ Implementation Graph:', BWHITE)} {len(dual_graph.implementation.nodes)} nodes, {len(dual_graph.implementation.edges)} edges")
+    else:
+        print(f"  {_c('②③ Graph context:', BWHITE)} (not available)")
+    # Evidence images
+    if evidence_images:
+        print(f"  {_c('④ Visual evidence:', BWHITE)} {len(evidence_images)} PDF/PNG page(s)")
+        for label, _, path in evidence_images:
+            print(f"     └─ {_c(label, DIM)}")
+    else:
+        print(f"  {_c('④ Visual evidence:', BWHITE)} (none loaded)")
+    print(f"  {_c('Total retrieval time:', DIM)} {elapsed:.1f}s")
     print()
 
 
@@ -300,59 +332,75 @@ def _run_retrieve(query: str, s: _Session) -> None:
 
 def _run_answer(query: str, s: _Session) -> None:
     from ..retrieval.answer_generator import generate_answer, load_evidence_images
-    from ..retrieval.query_router import retrieve
+    from ..retrieval.graph_retriever import fetch_dual_graph_context
+    from ..retrieval.vector_retriever import retrieve_chunks
     from ..config import config
 
     t0 = time.time()
-    with _Spinner("Retrieving chunks + graph…"):
-        qa = retrieve(query=query, top_k=s.top_k, include_graph=True)
+
+    # Step 1: Markdown chunk retrieval
+    with _Spinner("① Retrieving Markdown chunks…"):
+        chunks = retrieve_chunks(query=query, top_k=s.top_k)
     t1 = time.time()
-    _step("Retrieving chunks + graph", t1 - t0)
-    _print_chunks(qa.chunks, verbose=s.verbose)
-    if qa.graph_context:
-        _print_graph(qa.graph_context)
+    _step("① Markdown chunk retrieval", t1 - t0)
+    _print_chunks(chunks, verbose=s.verbose)
 
-    evidence_images: list = []
-    if s.evidence and qa.chunks:
-        with _Spinner("Loading evidence images…"):
-            evidence_images = load_evidence_images(qa.chunks, config.project_root)
-        t2 = time.time()
-        _step(f"Loading evidence images ({len(evidence_images)} PDFs)", t2 - t1)
+    # Step 2: Dual-layer graph context retrieval
+    dual_graph = None
+    with _Spinner("②③ Retrieving graph context (business + implementation)…"):
+        dual_graph = fetch_dual_graph_context(chunks, query=query) if chunks else None
+    t2 = time.time()
+    _step("②③ Graph context retrieval", t2 - t1)
+    if dual_graph and not dual_graph.is_empty:
+        _print_dual_graph(dual_graph)
     else:
-        t2 = t1
+        _print_graph(None)
 
-    with _Spinner("Generating answer…"):
+    # Step 3: PDF/PNG evidence resolution from chunk metadata
+    evidence_images: list = []
+    if s.evidence and chunks:
+        with _Spinner("④ Loading PDF/PNG evidence images…"):
+            evidence_images = load_evidence_images(chunks, config.project_root)
+        t3 = time.time()
+        _step(f"④ Evidence image resolution ({len(evidence_images)} pages)", t3 - t2)
+    else:
+        t3 = t2
+
+    # Print evidence flow summary
+    _print_evidence_flow(chunks, dual_graph, evidence_images, t3 - t0)
+
+    # Step 4: Multimodal VLM answer generation with full evidence pack
+    with _Spinner("Generating grounded answer (VLM)…"):
         ans = generate_answer(
             query=query,
-            retrieved_chunks=qa.chunks,
+            retrieved_chunks=chunks,
             evidence_images=evidence_images,
-            graph_context=qa.graph_context,
+            graph_context=dual_graph.to_merged_context() if dual_graph else None,
+            business_graph=dual_graph.business if dual_graph else None,
+            implementation_graph=dual_graph.implementation if dual_graph else None,
         )
-    t3 = time.time()
-    _step("Generating answer", t3 - t2)
-
-    if ans.graph_context_text:
-        n_nodes = len(qa.graph_context.nodes) if qa.graph_context else 0
-        n_edges = len(qa.graph_context.edges) if qa.graph_context else 0
-        print(_c(f"  Graph context sent to model: {n_nodes} nodes, {n_edges} edges", DIM))
+    t4 = time.time()
+    _step("VLM answer generation", t4 - t3)
 
     s.total_in_tok += ans.input_tokens
     s.total_out_tok += ans.output_tokens
-    s.total_latency += t3 - t0
-    _print_answer(ans, elapsed=t3 - t0)
+    s.total_latency += t4 - t0
+    _print_answer(ans, elapsed=t4 - t0)
 
 
 def _run_graph(query: str, s: _Session) -> None:
-    from ..retrieval.query_router import retrieve
+    from ..retrieval.graph_retriever import fetch_dual_graph_context
+    from ..retrieval.vector_retriever import retrieve_chunks
 
     t0 = time.time()
-    with _Spinner("Retrieving chunks + graph…"):
-        resp = retrieve(query=query, top_k=s.top_k, include_graph=True)
+    with _Spinner("Retrieving chunks + dual graph…"):
+        chunks = retrieve_chunks(query=query, top_k=s.top_k)
+        dual_graph = fetch_dual_graph_context(chunks, query=query) if chunks else None
     elapsed = time.time() - t0
-    _step("Retrieving chunks + graph", elapsed)
+    _step("Retrieving chunks + dual graph", elapsed)
     s.total_latency += elapsed
-    _print_chunks(resp.chunks, verbose=s.verbose)
-    _print_graph(resp.graph_context)
+    _print_chunks(chunks, verbose=s.verbose)
+    _print_dual_graph(dual_graph)
 
 
 def _handle_query(query: str, s: _Session) -> bool:
