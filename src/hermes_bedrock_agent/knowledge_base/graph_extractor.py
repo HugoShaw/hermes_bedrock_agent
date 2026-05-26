@@ -2,7 +2,9 @@
 
 Two-pass extraction using Claude Sonnet:
   Pass 1: Business Semantic Graph — high-level systems, processes, data flows
-  Pass 2: Implementation / Evidence Graph — APIs, fields, mappings, rules
+           (workbook-level summary + per-sheet content for full context)
+  Pass 2: Implementation / Evidence Graph — tables, fields, mappings, rules
+           (per-chunk, with full content to capture field-level relationships)
 
 Each pass sends the Markdown chunk content to the VLM and receives structured
 JSON with nodes and edges. Both are linked back to source chunks and PDF evidence.
@@ -15,6 +17,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Optional
 
 from ..clients.bedrock import converse_text, make_bedrock_client
@@ -28,83 +31,160 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BUSINESS_GRAPH_PROMPT = """\
-You are a business analyst extracting a Business Semantic Graph from an enterprise integration specification document.
+You are a system integration architect analyzing enterprise interface specification documents.
 
-## Input
-The following is parsed Markdown from an Excel specification sheet.
+## Context
+This workbook is an interface design document (IFマッピング定義書) that defines data integration \
+between enterprise systems. The document covers interface specifications, data mappings, API \
+definitions, and business rules.
+
+### Workbook-level Overview
+{workbook_summary}
+
+### Current Sheet
 - Workbook: {workbook_name}
 - Sheet: {sheet_name} (index: {sheet_index})
 
-## Content
+### Sheet Content
 {content}
 
 ## Task
-Extract a Business Semantic Graph containing:
-- **Systems**: Enterprise systems mentioned (e.g., SAP, DataSpider, ANDPAD, IntermediateFile)
-- **DataFlows**: Directional data flows between systems (which system sends data to which)
-- **BusinessProcesses**: High-level business processes described (e.g., 発注登録, 納品一覧取得)
-- **Relationships**: How systems connect, which processes trigger which data flows
+Extract a **Business Semantic Graph** that helps users understand the overall system architecture \
+and data flow design at a business level.
+
+Extract these node types:
+- **System**: Enterprise systems, middleware, platforms (e.g., SAP S4/HANA, DataSpider, ANDPAD)
+- **InterfaceSpec**: Interface specifications / IFマッピング definitions with IF-ID
+- **DataFlow**: Named data flows between systems (directional: source→target)
+- **BusinessProcess**: Business operations triggered by the interface (e.g., 発注情報登録, 納品一覧取得)
+- **API**: API operations exposed or consumed (e.g., 【Send】発注作成, 発注一覧取得 GET)
+
+Extract these edge types:
+- **SENDS_DATA_TO**: System A sends data to System B (directional data flow)
+- **CALLS_API**: System or process calls an API
+- **TRIGGERS**: Event or process triggers another process/flow
+- **PRODUCES**: Process produces data flow or intermediate file
+- **PART_OF**: Sub-component is part of a larger interface/process
 
 ## Output Format
-Return ONLY valid JSON (no markdown fencing):
+Return ONLY valid JSON (no markdown fencing, no comments):
 {{
   "nodes": [
-    {{"id": "<unique_id>", "label": "<System|DataFlow|BusinessProcess>", "name": "<display_name>", "description": "<brief description in original language>"}}
+    {{
+      "id": "<unique_stable_id>",
+      "label": "<System|InterfaceSpec|DataFlow|BusinessProcess|API>",
+      "name": "<display_name — use original Japanese for processes/APIs>",
+      "description": "<1-2 sentence description in original language>"
+    }}
   ],
   "edges": [
-    {{"from": "<node_id>", "to": "<node_id>", "relationship": "<FLOWS_TO|TRIGGERS|USES|PRODUCES|CONSUMES>", "description": "<brief description>"}}
+    {{
+      "from": "<source_node_id>",
+      "to": "<target_node_id>",
+      "relationship": "<SENDS_DATA_TO|CALLS_API|TRIGGERS|PRODUCES|PART_OF>",
+      "description": "<brief description of this relationship>"
+    }}
   ]
 }}
 
-Rules:
-- Use the ORIGINAL Japanese names for processes and data flows
-- System names: use canonical English names (SAP, DataSpider, ANDPAD, IntermediateFile)
-- Generate IDs as: label_name (e.g., System_SAP, DataFlow_発注データ連携, BusinessProcess_発注登録)
-- Keep the graph focused on business understanding — what happens, not how
-- Maximum 15 nodes and 20 edges per sheet
-- If the content is just a title page or change history with no business logic, return {{"nodes": [], "edges": []}}
+## Rules
+1. System names: use canonical names (SAP, DataSpider, ANDPAD, IntermediateFile)
+2. For processes and APIs, preserve the ORIGINAL Japanese names exactly
+3. Node IDs must be stable: use format `Label_ShortName` (e.g., System_SAP, API_発注作成, DataFlow_発注データ連携)
+4. Focus on WHAT happens at business level, not HOW fields are mapped
+5. Maximum 20 nodes and 25 edges per sheet
+6. If this sheet is just a title page, change history, or empty → return {{"nodes": [], "edges": []}}
 """
 
 _IMPLEMENTATION_GRAPH_PROMPT = """\
-You are a technical analyst extracting an Implementation / Evidence Graph from an enterprise integration specification document.
+You are a data integration engineer analyzing field-level mapping specifications.
 
-## Input
-The following is parsed Markdown from an Excel specification sheet.
+## Context
+This document defines field-by-field data mapping between enterprise systems. \
+It typically contains:
+- Source table/file with field definitions (左側: source system fields)
+- Target table/API with field definitions (右側: target system fields)
+- Mapping rules connecting source fields to target fields (中央: transformation logic)
+- Business rules and conditions that control the mapping
+
+### Current Sheet
 - Workbook: {workbook_name}
 - Sheet: {sheet_name} (index: {sheet_index})
-- Chunk type: {chunk_type}
+- Content type: {chunk_type}
 
-## Content
+### Sheet Content
 {content}
 
 ## Task
-Extract an Implementation Graph containing:
-- **API**: API endpoints or operations (e.g., 発注作成, 発注変更, GET /orders)
-- **Field**: Data fields mentioned in mapping tables (source and target fields)
-- **MappingRule**: Field-to-field mapping rules with transformation logic
-- **BusinessRule**: Business conditions, validation rules, special handling
-- **Table**: Database tables or intermediate files referenced
-- **Relationships**: Which fields map to which, which APIs use which fields, which rules apply
+Extract an **Implementation / Evidence Graph** focusing on the actual data structures, \
+field mappings, and transformation rules defined in this specification.
+
+Extract these node types:
+- **SourceTable**: Source system table or file (e.g., SAP発注情報ファイル, ヘッダレコード, 明細レコード)
+- **TargetTable**: Target system table or API payload (e.g., ANDPAD発注ヘッダ, ContractOrderItemForCreate)
+- **SourceField**: Individual field in the source table (with properties: no, type, required, length)
+- **TargetField**: Individual field in the target table (with properties: no, type, required, length)
+- **MappingRule**: A transformation rule connecting source to target (with: source_fields, target_field, logic)
+- **BusinessRule**: Condition or validation rule (with: condition_text, affected_fields)
+- **API**: API endpoint being called (with: method, direction)
+
+Extract these edge types:
+- **HAS_FIELD**: Table → Field (source or target)
+- **MAPS_TO**: SourceField → TargetField (direct 1:1 mapping)
+- **TRANSFORMS_TO**: SourceField → MappingRule → TargetField (with transformation logic)
+- **HAS_CONDITION**: MappingRule → BusinessRule (conditional mapping)
+- **CALLS_API**: SourceTable/DataFlow → API (which API is called)
+- **DEFINED_IN**: Field/Rule → Sheet (traceability)
 
 ## Output Format
-Return ONLY valid JSON (no markdown fencing):
+Return ONLY valid JSON (no markdown fencing, no comments):
 {{
   "nodes": [
-    {{"id": "<unique_id>", "label": "<API|Field|MappingRule|BusinessRule|Table>", "name": "<display_name>", "properties": {{"<key>": "<value>"}}}}
+    {{
+      "id": "<unique_stable_id>",
+      "label": "<SourceTable|TargetTable|SourceField|TargetField|MappingRule|BusinessRule|API>",
+      "name": "<display_name — use ORIGINAL Japanese field names>",
+      "properties": {{
+        "source_system": "<system name if known>",
+        "target_system": "<system name if known>",
+        "field_no": "<number if field>",
+        "data_type": "<field type>",
+        "required": "<true/false>",
+        "transformation": "<transformation logic text>",
+        "condition": "<condition text for rules>"
+      }}
+    }}
   ],
   "edges": [
-    {{"from": "<node_id>", "to": "<node_id>", "relationship": "<MAPS_TO|CALLS_API|HAS_FIELD|HAS_CONDITION|TRANSFORMS|DEFINED_IN>", "properties": {{"<key>": "<value>"}}}}
+    {{
+      "from": "<source_node_id>",
+      "to": "<target_node_id>",
+      "relationship": "<HAS_FIELD|MAPS_TO|TRANSFORMS_TO|HAS_CONDITION|CALLS_API|DEFINED_IN>",
+      "properties": {{
+        "mapping_logic": "<brief transformation description if applicable>"
+      }}
+    }}
   ]
 }}
 
-Rules:
-- Preserve ORIGINAL Japanese field names and rule descriptions
-- Generate IDs as: label_sheetNN_name (e.g., Field_sheet06_発注管理ID, API_sheet06_発注作成)
-- For MappingRules: include source_field, target_field, transformation in properties
-- For BusinessRules: include the condition text in properties
-- For Fields: include source_system and target_system in properties if known
-- Maximum 25 nodes and 30 edges per chunk
-- If the content has no implementation details, return {{"nodes": [], "edges": []}}
+## Rules
+1. Preserve ALL original Japanese field names exactly (e.g., 購買発注番号, 発注管理ID, 税込合計金額)
+2. Node IDs: `Label_sheet{{sheet_index:02d}}_ShortName` (e.g., SourceField_sheet06_購買発注番号)
+3. For fields with No. numbers, include the number in properties
+4. Capture SOURCE → TARGET mapping direction clearly:
+   - SourceField from left/source table → TargetField in right/target table
+   - Include the transformation logic in MappingRule properties
+5. For conditional mappings (e.g., "工事区分=1の場合..."), create a BusinessRule node
+5. IMPORTANT: Extract the complete mapping chain when visible:
+   SourceField --MAPS_TO--> TargetField (for simple 1:1 mappings)
+   SourceField --TRANSFORMS_TO--> MappingRule --MAPS_TO--> TargetField (for complex transformations)
+6. Focus on the MOST IMPORTANT mappings — prioritize:
+   - Key fields (IDs, amounts, dates)
+   - Fields with complex transformation logic
+   - Fields with business conditions
+   Skip trivial direct-copy fields that have no transformation logic
+7. Maximum 30 nodes and 35 edges per chunk
+8. If no implementation details exist → return {{"nodes": [], "edges": []}}
 """
 
 
@@ -113,12 +193,13 @@ Rules:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _clean_json_response(text: str) -> str:
-    """Strip markdown fencing and extract JSON from LLM response."""
+    """Strip markdown fencing and extract JSON from LLM response.
+    
+    Also attempts to repair truncated JSON (common when output hits max_tokens).
+    """
     text = text.strip()
-    # Remove ```json ... ``` wrapping
     if text.startswith("```"):
         lines = text.split("\n")
-        # Find first and last fence
         start = 1 if lines[0].startswith("```") else 0
         end = len(lines)
         for i in range(len(lines) - 1, 0, -1):
@@ -126,27 +207,112 @@ def _clean_json_response(text: str) -> str:
                 end = i
                 break
         text = "\n".join(lines[start:end]).strip()
+    
+    # Attempt to parse as-is first
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
+    
+    # Repair truncated JSON: find the last valid nodes/edges array
+    # Strategy: try to close open arrays and objects
+    repaired = text
+    # Count open brackets
+    open_braces = repaired.count("{") - repaired.count("}")
+    open_brackets = repaired.count("[") - repaired.count("]")
+    
+    # If we're inside a string value (trailing comma, incomplete value), truncate to last complete entry
+    # Find last complete object in array (last "}")
+    last_brace = repaired.rfind("}")
+    if last_brace > 0:
+        # Try truncating to last closing brace and closing arrays
+        candidate = repaired[:last_brace + 1]
+        # Re-count
+        open_braces = candidate.count("{") - candidate.count("}")
+        open_brackets = candidate.count("[") - candidate.count("]")
+        candidate += "]" * open_brackets + "}" * open_braces
+        try:
+            json.loads(candidate)
+            logger.info("JSON repaired by truncating to last complete object")
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    
+    # More aggressive: find the "edges" array start and close everything
+    edges_match = re.search(r'"edges"\s*:\s*\[', repaired)
+    if edges_match:
+        # Find last complete edge object
+        after_edges = repaired[edges_match.end():]
+        last_edge_close = after_edges.rfind("}")
+        if last_edge_close > 0:
+            candidate = repaired[:edges_match.end() + last_edge_close + 1] + "]}"
+            try:
+                json.loads(candidate)
+                logger.info("JSON repaired by closing edges array")
+                return candidate
+            except json.JSONDecodeError:
+                pass
+    
+    # Last resort: try to extract just nodes if edges are completely broken
+    nodes_match = re.search(r'"nodes"\s*:\s*\[', repaired)
+    if nodes_match:
+        # Find the closing of nodes array (before "edges")
+        if edges_match and edges_match.start() > nodes_match.end():
+            # Try: everything up to edges key, close as nodes-only
+            before_edges = repaired[:edges_match.start()]
+            # Remove trailing comma/whitespace
+            before_edges = before_edges.rstrip().rstrip(",").rstrip()
+            candidate = before_edges + '], "edges": []}'
+            # Ensure we have proper structure
+            if not candidate.startswith("{"):
+                candidate = "{" + candidate
+            try:
+                json.loads(candidate)
+                logger.warning("JSON partially repaired: only nodes extracted (edges truncated)")
+                return candidate
+            except json.JSONDecodeError:
+                pass
+    
     return text
 
 
-def _safe_node_id(label: str, name: str, sheet_index: int = 0) -> str:
-    """Generate a stable, safe node ID."""
-    clean = re.sub(r"[^\w\u3000-\u9fff]", "_", name)[:60]
-    return f"{label}_sheet{sheet_index:02d}_{clean}"
+def _load_workbook_summary(chunks: list[Chunk]) -> str:
+    """Build a workbook-level summary from cross_sheet_summary chunks or sheet list."""
+    # Look for cross_sheet_summary chunk
+    for chunk in chunks:
+        if chunk.chunk_type == "cross_sheet_summary":
+            # Return first 3000 chars of the cross-sheet summary as context
+            return chunk.content[:3000]
+
+    # Fallback: build a simple sheet list
+    sheet_info: dict[int, str] = {}
+    for c in chunks:
+        if c.sheet_index > 0 and c.sheet_index not in sheet_info:
+            sheet_info[c.sheet_index] = c.sheet_name
+    if not sheet_info:
+        return "(No workbook summary available)"
+
+    lines = ["Sheets in this workbook:"]
+    for idx in sorted(sheet_info):
+        lines.append(f"  Sheet {idx:02d}: {sheet_info[idx]}")
+    return "\n".join(lines)
 
 
 def _extract_business_graph_llm(
     chunk: Chunk,
     client,
     model_id: str,
-    max_content_chars: int = 6000,
+    workbook_summary: str,
+    max_content_chars: int = 12000,
 ) -> tuple[list[GraphNode], list[GraphEdge]]:
-    """Use Claude Sonnet to extract Business Semantic Graph from a chunk."""
+    """Use Claude Sonnet to extract Business Semantic Graph from a sheet."""
     content = chunk.content[:max_content_chars]
     prompt = _BUSINESS_GRAPH_PROMPT.format(
         workbook_name=chunk.workbook_name,
         sheet_name=chunk.sheet_name,
         sheet_index=chunk.sheet_index,
+        workbook_summary=workbook_summary,
         content=content,
     )
 
@@ -160,7 +326,7 @@ def _extract_business_graph_llm(
     try:
         data = json.loads(_clean_json_response(response_text))
     except json.JSONDecodeError as exc:
-        logger.warning("Business graph JSON parse failed for sheet %d: %s", chunk.sheet_index, exc)
+        logger.warning("Business graph JSON parse failed for sheet %d: %s\nResponse: %s", chunk.sheet_index, exc, response_text[:200])
         return [], []
 
     nodes: list[GraphNode] = []
@@ -174,6 +340,7 @@ def _extract_business_graph_llm(
         props = {"description": raw_node.get("description", "")}
         props.update(raw_node.get("properties", {}))
         props["sheet_index"] = chunk.sheet_index
+        props["sheet_name"] = chunk.sheet_name
         props["workbook_name"] = chunk.workbook_name
         nodes.append(GraphNode(
             node_id=node_id,
@@ -191,6 +358,7 @@ def _extract_business_graph_llm(
         props = {"description": raw_edge.get("description", "")}
         props.update(raw_edge.get("properties", {}))
         props["chunk_id"] = chunk.chunk_id
+        props["sheet_index"] = chunk.sheet_index
         edges.append(GraphEdge(
             from_id=from_id,
             to_id=to_id,
@@ -206,7 +374,7 @@ def _extract_implementation_graph_llm(
     chunk: Chunk,
     client,
     model_id: str,
-    max_content_chars: int = 6000,
+    max_content_chars: int = 12000,
 ) -> tuple[list[GraphNode], list[GraphEdge]]:
     """Use Claude Sonnet to extract Implementation/Evidence Graph from a chunk."""
     content = chunk.content[:max_content_chars]
@@ -219,7 +387,7 @@ def _extract_implementation_graph_llm(
     )
 
     try:
-        response_text, usage = converse_text(client, model_id, prompt, max_tokens=4096, temperature=0.1)
+        response_text, usage = converse_text(client, model_id, prompt, max_tokens=8000, temperature=0.1)
         logger.debug("Implementation LLM: %d in / %d out tokens", usage.get("inputTokens", 0), usage.get("outputTokens", 0))
     except Exception as exc:
         logger.warning("Implementation graph LLM call failed for chunk %s: %s", chunk.chunk_id, exc)
@@ -228,7 +396,7 @@ def _extract_implementation_graph_llm(
     try:
         data = json.loads(_clean_json_response(response_text))
     except json.JSONDecodeError as exc:
-        logger.warning("Implementation graph JSON parse failed for chunk %s: %s", chunk.chunk_id, exc)
+        logger.warning("Implementation graph JSON parse failed for chunk %s: %s\nResponse: %s", chunk.chunk_id, exc, response_text[:200])
         return [], []
 
     nodes: list[GraphNode] = []
@@ -240,13 +408,15 @@ def _extract_implementation_graph_llm(
         if not node_id:
             continue
         props = raw_node.get("properties", {})
+        if not isinstance(props, dict):
+            props = {}
         props["sheet_index"] = chunk.sheet_index
         props["sheet_name"] = chunk.sheet_name
         props["chunk_id"] = chunk.chunk_id
         props["workbook_name"] = chunk.workbook_name
         nodes.append(GraphNode(
             node_id=node_id,
-            label=raw_node.get("label", "Field"),
+            label=raw_node.get("label", "SourceField"),
             name=raw_node.get("name", node_id),
             properties=props,
             evidence_pdf_s3_path=pdf_path,
@@ -258,7 +428,10 @@ def _extract_implementation_graph_llm(
         if not from_id or not to_id:
             continue
         props = raw_edge.get("properties", {})
+        if not isinstance(props, dict):
+            props = {}
         props["chunk_id"] = chunk.chunk_id
+        props["sheet_index"] = chunk.sheet_index
         edges.append(GraphEdge(
             from_id=from_id,
             to_id=to_id,
@@ -274,11 +447,6 @@ def _extract_implementation_graph_llm(
 # Fallback: keyword-based extraction (no LLM cost, used for overview chunks)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_KNOWN_SYSTEMS = {
-    "SAP": "SAP S/4HANA", "S4/HANA": "SAP S/4HANA", "S4HANA": "SAP S/4HANA",
-    "DataSpider": "DataSpider (NTT DATA)", "ANDPAD": "ANDPAD",
-    "中間F": "中間ファイル (Intermediate File)", "中間ファイル": "中間ファイル (Intermediate File)",
-}
 _SYSTEM_CANONICAL = {
     "SAP": "SAP", "S4/HANA": "SAP", "S4HANA": "SAP",
     "DataSpider": "DataSpider", "ANDPAD": "ANDPAD",
@@ -305,7 +473,7 @@ def _extract_entities_keyword(chunk: Chunk) -> tuple[list[GraphNode], list[Graph
         sys_node_id = f"System_{canonical}"
         nodes.append(GraphNode(
             node_id=sys_node_id, label="System", name=canonical,
-            properties={"display_name": _KNOWN_SYSTEMS.get(sys_kw, sys_kw)},
+            properties={"source_keyword": sys_kw},
             evidence_pdf_s3_path=pdf_path,
         ))
         edges.append(GraphEdge(
@@ -328,30 +496,56 @@ def extract_business_graph(
 ) -> tuple[list[GraphNode], list[GraphEdge]]:
     """Extract Business Semantic Graph from chunks using LLM.
 
-    Groups chunks by sheet and sends one representative chunk per sheet
-    to avoid redundant LLM calls.
+    Strategy:
+    - Builds a workbook-level summary from cross_sheet_summary chunks
+    - For each sheet, concatenates ALL chunks of that sheet for maximum context
+    - Sends sheet content + workbook summary to Claude Sonnet
     """
     cfg = cfg or _default_config
     client = make_bedrock_client(cfg.aws_region)
     model_id = cfg.vlm_model_id
 
-    # Group chunks by sheet — pick the longest chunk per sheet for best context
-    sheet_chunks: dict[int, Chunk] = {}
+    # Build workbook-level summary for context
+    workbook_summary = _load_workbook_summary(chunks)
+
+    # Group chunks by sheet — concatenate all chunks per sheet for full context
+    sheet_content: dict[int, list[Chunk]] = {}
     for chunk in chunks:
         if chunk.sheet_index == 0:
             continue
-        existing = sheet_chunks.get(chunk.sheet_index)
-        if existing is None or len(chunk.content) > len(existing.content):
-            sheet_chunks[chunk.sheet_index] = chunk
+        sheet_content.setdefault(chunk.sheet_index, []).append(chunk)
 
     all_nodes: list[GraphNode] = []
     all_edges: list[GraphEdge] = []
 
-    for i, (sheet_idx, chunk) in enumerate(sorted(sheet_chunks.items())):
+    for i, (sheet_idx, sheet_chunks) in enumerate(sorted(sheet_content.items())):
         if i > 0:
             time.sleep(delay_seconds)
-        logger.info("Business graph: sheet %d (%s)", sheet_idx, chunk.sheet_name)
-        nodes, edges = _extract_business_graph_llm(chunk, client, model_id)
+
+        # Build a merged chunk with all content from this sheet
+        merged_text = "\n\n".join(c.content for c in sorted(sheet_chunks, key=lambda x: x.chunk_id))
+        # Use the first chunk as the representative (for metadata)
+        representative = sheet_chunks[0]
+        # Create a synthetic chunk with merged content
+        merged_chunk = Chunk(
+            chunk_id=representative.chunk_id,
+            content=merged_text,
+            chunk_type=representative.chunk_type,
+            sheet_index=sheet_idx,
+            sheet_name=representative.sheet_name,
+            workbook_name=representative.workbook_name,
+            source_pdf_s3_path=representative.source_pdf_s3_path,
+            source_excel_s3_path=representative.source_excel_s3_path,
+            source_markdown_s3_path=representative.source_markdown_s3_path,
+            related_sheets=representative.related_sheets,
+            systems=representative.systems,
+            apis=representative.apis,
+            fields=representative.fields,
+            embedding_text="",
+        )
+
+        logger.info("Business graph: sheet %d (%s) — %d chars", sheet_idx, representative.sheet_name, len(merged_text))
+        nodes, edges = _extract_business_graph_llm(merged_chunk, client, model_id, workbook_summary)
         all_nodes.extend(nodes)
         all_edges.extend(edges)
         logger.info("  → %d nodes, %d edges", len(nodes), len(edges))
@@ -368,14 +562,16 @@ def extract_implementation_graph(
 ) -> tuple[list[GraphNode], list[GraphEdge]]:
     """Extract Implementation/Evidence Graph from chunks using LLM.
 
-    Only processes chunks of relevant types (mapping, API, rules, conditions).
-    Overview chunks get lightweight keyword extraction.
+    Strategy:
+    - For mapping/API/rule/condition/flowchart chunks: full LLM extraction
+    - For overview chunks: lightweight keyword extraction (no cost)
+    - Sends each chunk's FULL content (up to 12K chars) for deep understanding
     """
     cfg = cfg or _default_config
     client = make_bedrock_client(cfg.aws_region)
     model_id = cfg.vlm_model_id
 
-    # Types that benefit from LLM extraction
+    # Types that have rich implementation detail worth LLM extraction
     llm_types = chunk_types or {"mapping_table", "api_spec", "business_rule", "data_condition", "flowchart"}
 
     all_nodes: list[GraphNode] = []
@@ -386,7 +582,10 @@ def extract_implementation_graph(
         if chunk.chunk_type in llm_types:
             if llm_call_count > 0:
                 time.sleep(delay_seconds)
-            logger.info("Implementation graph: chunk %s (type=%s)", chunk.chunk_id[:30], chunk.chunk_type)
+            logger.info(
+                "Implementation graph: chunk %s (type=%s, sheet=%d, %d chars)",
+                chunk.chunk_id[:30], chunk.chunk_type, chunk.sheet_index, len(chunk.content),
+            )
             nodes, edges = _extract_implementation_graph_llm(chunk, client, model_id)
             all_nodes.extend(nodes)
             all_edges.extend(edges)
