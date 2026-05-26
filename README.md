@@ -150,9 +150,9 @@ hermes_bedrock_agent/
 ├── scripts/                      # ユーティリティ・デモスクリプト
 │   ├── demo_qa_evidence_flow.py  # QA 証跡フロー検証 (全4証跡タイプ)
 │   ├── demo_graph_extraction.py  # グラフ抽出テスト (LLM / keyword 両対応)
-│   ├── run_parse.py              # hermes parse の直接実行
-│   ├── run_build_kb.py           # hermes build-kb の直接実行
-│   └── run_qa.py                 # hermes qa の直接実行
+│   ├── run_parse.py              # dualrag parse の直接実行
+│   ├── run_build_kb.py           # dualrag build-kb の直接実行
+│   └── run_qa.py                 # dualrag qa の直接実行
 │
 ├── archive/                      # レガシーコード (git mv で履歴保持)
 │   ├── app_doc_pipeline/         # 旧パース処理
@@ -178,11 +178,11 @@ hermes_bedrock_agent/
 
 ```
 S3 上の Excel ファイル
-    ↓  hermes parse --s3-prefix ...
+    ↓  dualrag parse --s3-prefix ...
 ローカルにダウンロード → PDF 変換 → PNG レンダリング → VLM 解析 → Markdown
-    ↓  hermes build-kb outputs/reparse_wb2/vlm_parsed/
+    ↓  dualrag build-kb outputs/reparse_wb2/vlm_parsed/
 チャンク分割 → Titan Embed V2 → LanceDB 格納 + Neptune グラフ構築
-    ↓  hermes qa
+    ↓  dualrag qa
 インタラクティブ QA ターミナル (retrieve / answer / graph モード)
 ```
 

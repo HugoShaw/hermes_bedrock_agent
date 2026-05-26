@@ -21,7 +21,7 @@ pdf = ["pdf2image", "pypdf>=4.0"]
 graph = ["gremlinpython>=3.8.1"]
 
 [project.scripts]
-hermes = "hermes_bedrock_agent.cli:main"
+dualrag = "hermes_bedrock_agent.cli:main"
 
 [build-system]
 requires = ["hatchling"]

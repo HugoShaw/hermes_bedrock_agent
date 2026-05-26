@@ -13,8 +13,8 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 app = typer.Typer(
-    name="hermes",
-    help="Hermes: S3 → Excel/PDF parsing → dual-RAG knowledge base → QA terminal.",
+    name="dualrag",
+    help="DualRAG: S3 → Excel/PDF parsing → dual-RAG knowledge base → QA terminal.",
     add_completion=False,
 )
 console = Console()
