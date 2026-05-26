@@ -135,8 +135,8 @@ hermes_bedrock_agent/
 │   │   ├── schemas.py            # Chunk, GraphNode, GraphEdge, RetrievedChunk, QAResponse
 │   │   ├── chunker.py            # Markdown → セマンティックチャンク分割
 │   │   ├── vector_store.py       # Titan Embed V2 → LanceDB 格納・検索
-│   │   ├── graph_extractor.py    # LLM エンティティ抽出 (System, API, Field, ...)
-│   │   └── graph_loader.py       # Neptune MERGE ローダー
+│   │   ├── graph_extractor.py    # Claude Sonnet LLM 2パス抽出 (Business + Implementation)
+│   │   └── graph_loader.py       # Neptune MERGE ローダー (keyword / LLM 両対応)
 │   │
 │   ├── retrieval/                # Stage 3: 検索・回答生成
 │   │   ├── vector_retriever.py   # LanceDB ベクトル検索
@@ -147,7 +147,9 @@ hermes_bedrock_agent/
 │   └── qa/                       # Stage 3: インタラクティブ QA
 │       └── terminal.py           # REPL (spinner, tab補完, 履歴, /mode, /topk ...)
 │
-├── scripts/                      # 薄いラッパースクリプト
+├── scripts/                      # ユーティリティ・デモスクリプト
+│   ├── demo_qa_evidence_flow.py  # QA 証跡フロー検証 (全4証跡タイプ)
+│   ├── demo_graph_extraction.py  # グラフ抽出テスト (LLM / keyword 両対応)
 │   ├── run_parse.py              # hermes parse の直接実行
 │   ├── run_build_kb.py           # hermes build-kb の直接実行
 │   └── run_qa.py                 # hermes qa の直接実行
@@ -309,6 +311,67 @@ uv run python -m hermes_bedrock_agent.cli build-kb \
 uv run python -m hermes_bedrock_agent.cli build-kb \
   outputs/run_XXX/workbook_name/vlm_parsed/ \
   --dry-run-graph
+```
+
+**LLM グラフ抽出 (Claude Sonnet で高品質グラフ生成):**
+
+```bash
+# 2パス LLM 抽出: Business + Implementation Graph
+uv run python -m hermes_bedrock_agent.cli build-kb \
+  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  --use-llm-graph \
+  --graph-delay 3.0
+
+# Dry-run で結果確認後、Neptune に書き込み
+uv run python -m hermes_bedrock_agent.cli build-kb \
+  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  --use-llm-graph --dry-run-graph
+```
+
+**グラフ抽出の 2 つのモード:**
+
+| モード | フラグ | 品質 | コスト | 用途 |
+|--------|--------|------|--------|------|
+| Keyword | (default) | △ 浅い | 無料 | 高速テスト、初期検証 |
+| LLM | `--use-llm-graph` | ◎ 高品質 | Claude Sonnet 呼び出し | 本番 KB 構築 |
+
+**LLM グラフ抽出の仕組み:**
+
+```
+Parsed Markdown (.md)
+    │
+    ├─ Pass 1: Business Semantic Graph (シート単位 × 1 LLM call)
+    │    → System nodes (SAP, DataSpider, ANDPAD)
+    │    → DataFlow nodes (発注データ連携, 発注ヘッダ情報)
+    │    → BusinessProcess nodes (発注情報登録, 税込額算出)
+    │    → Edges: FLOWS_TO, TRIGGERS, PRODUCES, USES
+    │
+    ├─ Pass 2: Implementation Graph (チャンク単位 × N LLM calls)
+    │    → API nodes (【Send】発注作成)
+    │    → Field nodes (購買発注番号, 発注管理ID)
+    │    → MappingRule nodes (購買発注番号→発注管理ID変換)
+    │    → BusinessRule nodes (条件, バリデーション)
+    │    → Table nodes (SAP発注情報ファイル)
+    │    → Edges: MAPS_TO, HAS_FIELD, CALLS_API, HAS_CONDITION
+    │
+    └─ All nodes/edges → Neptune MERGE
+         (evidence_pdf_s3_path + chunk_id でソース追跡可能)
+```
+
+**デモ: LLM グラフ抽出テスト:**
+
+```bash
+# 1シート分のみ LLM テスト (約 60 秒):
+uv run python scripts/demo_graph_extraction.py \
+  outputs/reparse_wb2/vlm_parsed/sheet_06.md
+
+# Keyword のみ (LLM なし、即座):
+uv run python scripts/demo_graph_extraction.py --keyword-only \
+  outputs/reparse_wb2/vlm_parsed/sheet_06.md
+
+# 複数シート (max 3):
+uv run python scripts/demo_graph_extraction.py --max-sheets 3 \
+  outputs/reparse_wb2/vlm_parsed/
 ```
 
 ### 5.5 QA Interactive Terminal の実行

@@ -126,6 +126,8 @@ def build_kb(
     skip_vector: bool = typer.Option(False, "--skip-vector", help="Skip LanceDB embedding"),
     skip_graph: bool = typer.Option(False, "--skip-graph", help="Skip Neptune graph loading"),
     dry_run_graph: bool = typer.Option(False, "--dry-run-graph", help="Extract graph but don't write to Neptune"),
+    use_llm_graph: bool = typer.Option(False, "--use-llm-graph", help="Use Claude Sonnet LLM for graph extraction (higher quality, costs tokens)"),
+    graph_delay: float = typer.Option(3.0, "--graph-delay", help="Delay seconds between LLM calls for graph extraction"),
     log_level: str = typer.Option("INFO", "--log-level", help="Logging level"),
 ) -> None:
     """Stage 2: Parsed markdown → LanceDB vector store + Neptune graph."""
@@ -179,13 +181,19 @@ def build_kb(
 
     if not skip_graph:
         logger.info("Step 3: Building knowledge graph")
-        graph_stats = build_graph(chunks, dry_run=dry_run_graph)
+        graph_stats = build_graph(chunks, dry_run=dry_run_graph, use_llm=use_llm_graph, delay_seconds=graph_delay)
         results["graph"] = graph_stats
+        mode_str = "LLM" if use_llm_graph else "keyword"
         console.print(
-            f"Neptune: [cyan]{graph_stats['node_count']}[/cyan] nodes, "
+            f"Neptune ({mode_str}): [cyan]{graph_stats['node_count']}[/cyan] nodes, "
             f"[cyan]{graph_stats['edge_count']}[/cyan] edges "
             f"(errors: {graph_stats['error_count']})"
         )
+        if use_llm_graph and "business_nodes" in graph_stats:
+            console.print(
+                f"  Business: {graph_stats['business_nodes']} nodes, {graph_stats['business_edges']} edges | "
+                f"  Implementation: {graph_stats['implementation_nodes']} nodes, {graph_stats['implementation_edges']} edges"
+            )
     else:
         console.print("[dim]Skipped graph build[/dim]")
 
