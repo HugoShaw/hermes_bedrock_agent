@@ -1,193 +1,425 @@
 # hermes_bedrock_agent
 
-Enterprise AI platform for Bedrock KB query, S3 document ETL, multimodal parsing, Semantic Map, and Neptune Analytics GraphRAG.
+企業設計ドキュメント (Excel/PDF) を解析し、Dual-RAG ナレッジベースを構築し、マルチモーダル QA ターミナルで質問応答を行うための統合パイプラインです。
 
-## Project Positioning
+## 1. プロジェクトの目的
 
-This is a unified enterprise knowledge processing platform that supports:
-- **Bedrock Knowledge Base** multi-KB parallel retrieval
-- **S3 Enterprise Document** scanning and incremental processing
-- **Multimodal Document Parsing** (PDF, images, diagrams, code, SQL)
-- **Semantic Map / Graph Data** generation with entity/relation extraction
-- **Neptune Analytics** graph data write and vector search
-- **GraphRAG / Knowledge Q&A / Process Generation** infrastructure
+日本企業の設計ドキュメント（Excel で作成された IF マッピング定義書、業務フロー図、フィールドマッピング表など）を自動解析し、構造化されたナレッジベースを構築します。
 
-## Directory Structure
+**主要機能:**
+
+- **S3 ファイル解析** — S3 バケットからドキュメントをスキャンし、ファイル種別ごとに適切なパーサーにルーティング
+- **Excel VLM 解析** — Excel → シート単位 PDF 変換 → PNG レンダリング → Claude Sonnet マルチモーダル解析 → Markdown 出力
+- **Dual-RAG ナレッジベース構築** — ベクトルデータベース (LanceDB) + グラフデータベース (Neptune Analytics) の二重知識表現
+- **マルチモーダル QA ターミナル** — テキストチャンク + PDF 画像エビデンス + グラフコンテキストを統合した質問応答
+
+## 2. プロジェクトアーキテクチャ
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  S3 Source Documents                                                         │
+│  (Excel .xlsx / PDF / Images)                                                │
+└───────────────┬─────────────────────────────────────────────────────────────┘
+                │ Stage 1: S3 Discovery & Download
+                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Document Parsing Pipeline                                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │ Excel→PDF    │→ │ PDF→PNG      │→ │ VLM Parse    │→ │ Post-process │   │
+│  │ (LibreOffice)│  │ (pdftoppm)   │  │ (Claude VLM) │  │ (Markdown)   │   │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘   │
+└───────────────┬─────────────────────────────────────────────────────────────┘
+                │ Stage 2: Markdown → Chunks
+                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Knowledge Base Construction                                                 │
+│  ┌────────────────────────────────┐  ┌────────────────────────────────┐    │
+│  │  Vector Store (LanceDB)        │  │  Graph Store (Neptune Analytics)│    │
+│  │  - Titan Embed V2 (1024dim)    │  │  - openCypher MERGE            │    │
+│  │  - Cosine similarity search    │  │  - Entity/Relation extraction  │    │
+│  └────────────────────────────────┘  └────────────────────────────────┘    │
+└───────────────┬─────────────────────────────────────────────────────────────┘
+                │ Stage 3: Retrieval & Answer Generation
+                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  QA Interactive Terminal                                                      │
+│  - Vector retrieval (Top-K chunks)                                           │
+│  - Graph context retrieval (Neptune)                                         │
+│  - Evidence PDF image loading                                                │
+│  - Multimodal answer generation (text + images + graph → Claude Converse)    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Excel VLM 解析フロー (詳細)
+
+```
+Excel ファイル (.xlsx)
+    │
+    ▼ LibreOffice UNO (port 2002)
+シート単位 PDF (sheet_01.pdf, sheet_02.pdf, ...)
+    │
+    ▼ pdftoppm (adaptive DPI: 36-150)
+シート単位 PNG 画像
+    │  ├─ 小さいシート → 1枚の画像
+    │  └─ 大きいシート → タイル分割 (3000px, overlap 300px)
+    │
+    ▼ Claude Sonnet Multimodal (Bedrock Converse API)
+    │  ├─ シート種別判定 (mapping / flowchart / dev_spec / ...)
+    │  ├─ 種別ごとの専用プロンプト
+    │  ├─ タイル → 個別解析 → 合成 (synthesis)
+    │  └─ 3秒間隔 (シート間) / 2秒間隔 (タイル間) — 並列化禁止
+    │
+    ▼ Markdown 出力
+sheet_01.md, sheet_02.md, ... (+ _meta.json, tiles.json)
+```
+
+## 3. ディレクトリ構成
 
 ```
 hermes_bedrock_agent/
-  .env                          # Environment configuration
-  .env.example                  # Configuration template
-  pyproject.toml                # Project metadata and dependencies
-  uv.lock                       # Locked dependencies
-
-  docs/                         # Documentation
-    architecture.md             # System architecture
-    graph_schema.md             # Graph node/edge schema
-    operation_guide.md          # Running and monitoring
-
-  configs/                      # YAML configuration files
-    graph_schema.yaml           # Valid node labels and edge types
-    ingestion.yaml              # Pipeline settings
-    llm.yaml                    # LLM provider configuration
-
-  src/hermes_bedrock_agent/     # Main package
-    config.py                   # Unified configuration
-    cli.py                      # Typer CLI entry point
-
-    kb/                         # Bedrock Knowledge Base query
-      bedrock_kb_client.py      # Single + Multi-KB clients
-      kb_query.py               # High-level query functions
-
-    graph/                      # Neptune Analytics operations
-      neptune_client.py         # openCypher client
-      cypher_templates.py       # Query templates
-      query_examples.cypher     # Example queries
-
-    s3_graph_etl/               # S3 → Parse → Graph pipeline
-      schemas.py                # Pydantic models (DocumentChunk, GraphNode, GraphEdge)
-      sources/                  # S3 scanning and file tracking
-      parsers/                  # File parsing (text, code, PDF, DOCX, image)
-      llm/                      # Multimodal LLM clients
-      extractors/               # Entity/relation extraction
-      embeddings/               # Embedding providers (Bedrock, OpenAI, Mock)
-      graph_builder/            # Graph assembly and loading
-      jobs/                     # Job runners (ingestion, incremental sync)
-
-  scripts/                      # Standalone scripts
-    run_s3_graph_etl.py
-    run_kb_query.py
-    run_neptune_query.py
-
-  semantic_map_workflow/         # Existing experimental assets
-
-  data/                         # Data directory
-    raw/                        # Raw downloaded files
-    processed/                  # Processed intermediates
-    registry/                   # File processing registry
-    artifacts/                  # Output artifacts (nodes.jsonl, edges.jsonl)
-
-  logs/                         # Log files
-  tests/                        # Pytest test suite
+├── src/hermes_bedrock_agent/     # メインパッケージ (3365 LOC)
+│   ├── __init__.py               # Version 1.0.0
+│   ├── config.py                 # 統合設定 (.env ベース)
+│   ├── cli.py                    # CLI エントリポイント (parse / build-kb / qa)
+│   │
+│   ├── clients/                  # AWS サービスクライアント
+│   │   ├── bedrock.py            # Converse API (text + multimodal + embedding)
+│   │   ├── neptune.py            # Neptune Analytics openCypher + SigV4
+│   │   └── s3.py                 # S3 list/download ヘルパー
+│   │
+│   ├── parsing/                  # Stage 1: ドキュメント解析
+│   │   ├── models.py             # Pydantic モデル (SheetInfo, SheetImages, ParseResult)
+│   │   ├── s3_discovery.py       # S3 スキャン、ファイル分類、WorkManifest
+│   │   ├── excel_parser.py       # Excel → シート単位 PDF (LibreOffice UNO)
+│   │   ├── pdf_parser.py         # PDF → PNG (adaptive DPI + タイル分割)
+│   │   ├── vlm_client.py         # VLM 解析 (Claude Sonnet multimodal)
+│   │   ├── text_parser.py        # Markdown ポスト処理
+│   │   ├── image_utils.py        # PIL タイリング、スティッチング、リサイズ
+│   │   └── libreoffice.py        # LibreOffice UNO 接続管理
+│   │
+│   ├── knowledge_base/           # Stage 2: ナレッジベース構築
+│   │   ├── schemas.py            # Chunk, GraphNode, GraphEdge, RetrievedChunk, QAResponse
+│   │   ├── chunker.py            # Markdown → セマンティックチャンク分割
+│   │   ├── vector_store.py       # Titan Embed V2 → LanceDB 格納・検索
+│   │   ├── graph_extractor.py    # LLM エンティティ抽出 (System, API, Field, ...)
+│   │   └── graph_loader.py       # Neptune MERGE ローダー
+│   │
+│   ├── retrieval/                # Stage 3: 検索・回答生成
+│   │   ├── vector_retriever.py   # LanceDB ベクトル検索
+│   │   ├── graph_retriever.py    # Neptune グラフコンテキスト取得
+│   │   ├── answer_generator.py   # マルチモーダル回答生成 (chunks + PDF画像 + graph)
+│   │   └── query_router.py       # retrieve / answer オーケストレーション
+│   │
+│   └── qa/                       # Stage 3: インタラクティブ QA
+│       └── terminal.py           # REPL (spinner, tab補完, 履歴, /mode, /topk ...)
+│
+├── scripts/                      # 薄いラッパースクリプト
+│   ├── run_parse.py              # hermes parse の直接実行
+│   ├── run_build_kb.py           # hermes build-kb の直接実行
+│   └── run_qa.py                 # hermes qa の直接実行
+│
+├── archive/                      # レガシーコード (git mv で履歴保持)
+│   ├── app_doc_pipeline/         # 旧パース処理
+│   ├── app_dual_rag/             # 旧 QA パイプライン
+│   ├── app_excel_parse_pipeline/ # 旧 Excel 解析
+│   ├── app_excel_parser/         # 旧 Excel パーサー
+│   ├── scripts_legacy/           # 旧スクリプト群
+│   ├── src_v1_and_v2/            # v1 + v2 旧コード
+│   └── docs_legacy/             # 旧ドキュメント
+│
+├── configs/                      # YAML 設定ファイル
+├── data/                         # ローカルデータ (vector_store, processed, artifacts)
+├── outputs/                      # パイプライン出力結果
+├── tests/                        # テストスイート
+├── pyproject.toml                # プロジェクト定義 + 依存関係
+├── .env.example                  # 環境変数テンプレート
+└── .env                          # 実環境変数 (git対象外)
 ```
 
-## Setup
+## 4. メインワークフロー
 
-### Prerequisites
+### End-to-End フロー
+
+```
+S3 上の Excel ファイル
+    ↓  hermes parse --s3-prefix ...
+ローカルにダウンロード → PDF 変換 → PNG レンダリング → VLM 解析 → Markdown
+    ↓  hermes build-kb outputs/run_XXX/workbook_name/vlm_parsed/
+チャンク分割 → Titan Embed V2 → LanceDB 格納 + Neptune グラフ構築
+    ↓  hermes qa
+インタラクティブ QA ターミナル (retrieve / answer / graph モード)
+```
+
+### パイプライン出力構造
+
+```
+outputs/run_YYYYMMDD_HHMMSS/
+├── downloads/                    # S3 からダウンロードした Excel ファイル
+├── workbook_name/
+│   ├── pdf/                      # シート単位 PDF
+│   │   ├── sheet_01.pdf
+│   │   └── sheet_02.pdf
+│   ├── images/                   # PNG レンダリング結果
+│   │   ├── sheet_01/
+│   │   │   ├── full.png          # フルシート画像
+│   │   │   └── tiles/            # タイル (大きいシートの場合)
+│   │   └── sheet_02/
+│   ├── vlm_parsed/               # VLM 解析結果 (Markdown)
+│   │   ├── sheet_01.md
+│   │   ├── sheet_01_meta.json
+│   │   ├── sheet_02.md
+│   │   └── cross_sheet_summary.md
+│   └── dual_rag/                 # KB 構築出力
+│       ├── chunks.jsonl
+│       └── kb_summary.json
+└── parse_summary.json            # 実行サマリー
+```
+
+## 5. How-to ガイド (新規ユーザー向け)
+
+### 5.1 環境セットアップ
+
+**前提条件:**
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/) package manager
-- AWS credentials configured (`~/.aws/credentials` or env vars)
-
-### Install Dependencies
+- [uv](https://docs.astral.sh/uv/) パッケージマネージャ
+- AWS 認証情報 (`~/.aws/credentials` または環境変数)
+- LibreOffice (Excel→PDF 変換に必要)
+- poppler-utils (PDF→PNG 変換に必要: `pdftoppm`, `pdfinfo`)
 
 ```bash
+# プロジェクトのクローン
 cd ~/projects/hermes_bedrock_agent
+
+# 依存関係のインストール
+uv sync
+
+# 開発用依存関係も含める場合
 uv sync --dev
 ```
 
-### Configuration
+### 5.2 `.env` の設定
 
 ```bash
 cp .env.example .env
-# Edit .env with your values:
-#   - AWS_REGION
-#   - BEDROCK_KNOWLEDGE_BASES (or BEDROCK_KNOWLEDGE_BASE_ID)
-#   - S3_BUCKET, S3_PREFIX
-#   - NEPTUNE_GRAPH_ID
-#   - EMBEDDING_PROVIDER, EMBEDDING_MODEL_ID, EMBEDDING_DIMENSION
-#   - VISION_LLM_PROVIDER, VISION_LLM_MODEL_ID
-#   - DRY_RUN=true (start with dry-run)
 ```
 
-## Running
-
-### Dry-Run (no AWS calls, generates sample artifacts)
+**最低限必要な設定:**
 
 ```bash
-uv run python -m hermes_bedrock_agent.s3_graph_etl.jobs.run_ingestion --dry-run
+# --- AWS ---
+AWS_REGION=ap-northeast-1
+
+# --- S3 (ドキュメントの格納場所) ---
+S3_BUCKET=your-bucket-name
+S3_PREFIX=output/
+
+# --- Bedrock Models ---
+# VLM (マルチモーダル解析 + 回答生成)
+VISION_LLM_MODEL_ID=jp.anthropic.claude-sonnet-4-6
+
+# Embedding
+EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
+EMBEDDING_DIMENSION=1024
+
+# --- Vector Store (LanceDB) ---
+VECTOR_LOCAL_STORE_PATH=/home/ubuntu/projects/data/vector_store/lancedb
+
+# --- Neptune Analytics (グラフ DB, オプション) ---
+NEPTUNE_GRAPH_ID=g-xxxxxxxxxx
 ```
 
-Output: `data/artifacts/nodes.jsonl` and `data/artifacts/edges.jsonl`
+### 5.3 Document Parsing Pipeline の実行
 
-### Real S3 Ingestion
+**ローカル Excel ファイルを解析:**
 
 ```bash
-# Set DRY_RUN=false in .env, or:
-uv run python -m hermes_bedrock_agent.s3_graph_etl.jobs.run_ingestion --once --prefix output/
+uv run python -m hermes_bedrock_agent.cli parse --file /path/to/document.xlsx
 ```
 
-### Write to Neptune
+**S3 上のファイルを解析:**
 
 ```bash
-# Ensure NEPTUNE_GRAPH_ID is set in .env
-# Set DRY_RUN=false
-uv run python -m hermes_bedrock_agent.s3_graph_etl.jobs.run_ingestion --once
+uv run python -m hermes_bedrock_agent.cli parse --s3-prefix output/murata/
 ```
 
-### Incremental Sync
+**出力先の指定:**
 
 ```bash
-uv run python -m hermes_bedrock_agent.s3_graph_etl.jobs.incremental_sync
+uv run python -m hermes_bedrock_agent.cli parse \
+  --file document.xlsx \
+  --output-dir outputs/my_run
 ```
 
-### KB Query
+**注意:** Excel VLM 解析は 1 シートあたり 40-120 秒かかります。27 シートの Excel ファイルで約 30-60 分程度です。
+
+### 5.4 Dual-RAG Knowledge Base の構築
 
 ```bash
-uv run python scripts/run_kb_query.py "付款申請流程" --top-k 5
+uv run python -m hermes_bedrock_agent.cli build-kb \
+  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  --workbook "IFマッピング定義書" \
+  --s3-excel-key "output/murata/document.xlsx"
 ```
 
-### Neptune Query
+**Neptune グラフをスキップ (ベクトルDB のみ):**
 
 ```bash
-uv run python scripts/run_neptune_query.py "MATCH (n) RETURN n.name LIMIT 10"
+uv run python -m hermes_bedrock_agent.cli build-kb \
+  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  --skip-graph
 ```
 
-## query_examples.cypher
+**Dry-run (Neptune 書き込みなし、抽出結果の確認のみ):**
 
-Located at `src/hermes_bedrock_agent/graph/query_examples.cypher`. Contains:
-1. Query all relationships
-2. Query nodes by name (payment/付款)
-3. One-hop neighbor query
-4. Two-hop traversal
-5. Vector similarity top-k
-6. GraphRAG (vector + graph traversal)
-
-Usage:
 ```bash
-uv run python scripts/run_neptune_query.py --file src/hermes_bedrock_agent/graph/query_examples.cypher
+uv run python -m hermes_bedrock_agent.cli build-kb \
+  outputs/run_XXX/workbook_name/vlm_parsed/ \
+  --dry-run-graph
 ```
 
-## Hermes Cron Scheduled Execution
+### 5.5 QA Interactive Terminal の実行
 
-Daily incremental sync at 2:00 AM:
+**インタラクティブモード:**
 
 ```bash
-cd ~/projects/hermes_bedrock_agent
-source .venv/bin/activate
-python -m hermes_bedrock_agent.s3_graph_etl.jobs.incremental_sync
+uv run python -m hermes_bedrock_agent.cli qa
 ```
 
-Requirements:
-- Only processes new/changed files (based on ETag comparison)
-- Outputs: `data/artifacts/nodes.jsonl` and `edges.jsonl`
-- Failures logged to: `logs/errors.log`
-- Does NOT auto-modify code
-
-## Tests
+**カタログディレクトリ付き (シート名マッピング + 原文参照):**
 
 ```bash
-uv run pytest
+uv run python -m hermes_bedrock_agent.cli qa \
+  --catalog-dir outputs/run_XXX/workbook_name/
 ```
 
-## Development
+**ワンショットクエリ:**
 
 ```bash
-# Install dev dependencies
-uv sync --dev
+uv run python -m hermes_bedrock_agent.cli qa \
+  "SAP から ANDPAD への発注データフローを説明してください"
+```
 
-# Run linter
+**QA ターミナル内コマンド:**
+
+| コマンド | 説明 |
+|---------|------|
+| `/mode [retrieve\|answer\|graph]` | クエリモード切替 |
+| `/topk N` | Top-K 結果数の設定 (1-20) |
+| `/verbose` | チャンク全文表示の切替 |
+| `/evidence` | エビデンス画像の読み込み切替 |
+| `/sheets` | 利用可能なシート一覧 |
+| `/sheet N` | シート N の内容表示 |
+| `/history` | クエリ履歴 |
+| `/stats` | セッション統計 |
+| `/help` | ヘルプ |
+| `/quit` | 終了 |
+
+### 5.6 出力結果とログの確認
+
+**解析サマリー:**
+```bash
+cat outputs/run_XXX/parse_summary.json
+```
+
+**KB 構築サマリー:**
+```bash
+cat outputs/run_XXX/workbook_name/dual_rag/kb_summary.json
+```
+
+**詳細ログの有効化:**
+```bash
+uv run python -m hermes_bedrock_agent.cli parse --file doc.xlsx --log-level DEBUG
+```
+
+**チャンク JSONL の確認:**
+```bash
+head -5 outputs/run_XXX/workbook_name/dual_rag/chunks.jsonl | python -m json.tool
+```
+
+## 6. 重要な注意事項
+
+### AWS リソース要件
+
+| リソース | 用途 | 必須 |
+|---------|------|------|
+| **Bedrock (Claude Sonnet)** | VLM 解析 + 回答生成 | ✅ |
+| **Bedrock (Titan Embed V2)** | テキスト埋め込み (1024次元) | ✅ |
+| **S3 バケット** | ソースドキュメント格納 | ✅ |
+| **Neptune Analytics** | グラフ知識表現 | ⚠️ オプション |
+
+### Bedrock モデル設定
+
+ap-northeast-1 リージョンでは、推論プロファイルプレフィックスが必要です:
+
+```
+✅ jp.anthropic.claude-sonnet-4-6
+❌ anthropic.claude-sonnet-4-20250514-v1:0  (ValidationException)
+```
+
+プレフィックス一覧:
+- `jp.anthropic.*` — Japan リージョン
+- `apac.anthropic.*` — APAC リージョン
+- `global.anthropic.*` — グローバル
+
+### VLM 解析の制約 (重要)
+
+- **並列化禁止** — 同時に複数の VLM 呼び出しを行うと、Bedrock で 300 秒以上のカスケードタイムアウトが発生します
+- **シート間: 3 秒間隔** — `config.vlm_delay_seconds`
+- **タイル間: 2 秒間隔** — ハードコード
+- **max_tokens ≥ 12000** — 大きいマッピングシートの出力には最低 12000 トークン必要
+- **boto3 read_timeout = 600 秒** — VLM 出力が大きい場合、デフォルトの 60 秒では不足
+
+### LanceDB 設定
+
+- デフォルトパス: `/home/ubuntu/projects/data/vector_store/lancedb`
+- コレクション名: `murata_excel_vlm_dual_rag`
+- build-kb 実行時、既存テーブルは自動的にドロップ＆再構築されます
+
+### Neptune Analytics 設定
+
+- Graph ID 形式: `g-xxxxxxxxxx`
+- リージョン: `ap-northeast-1`
+- 認証: IAM + SigV4
+- openCypher クエリ (Gremlin ではない)
+- MERGE + SET パターンでノード・エッジを upsert
+
+### 画像処理の制約
+
+- 最大画像サイズ: 7900px (Bedrock 制限: 8000px)
+- タイルサイズ: 3000px (overlap: 300px)
+- リサイズ: LANCZOS アルゴリズム
+- PIL.MAX_IMAGE_PIXELS = 500,000,000 (大きなシートの処理用)
+
+### LibreOffice 要件
+
+Excel→PDF 変換には LibreOffice がリスニングモードで起動している必要があります:
+
+```bash
+soffice --headless --accept="socket,host=localhost,port=2002;urp;" --norestore &
+```
+
+### 既知の制限
+
+1. `chunker.py` はシート番号 1-27 をハードコードしています（将来的に動的検出に改善予定）
+2. グラフ抽出はルールベース + キーワードマッチング（LLM 抽出は大規模ワークロードではコスト高）
+3. ベクトル検索は build-kb 実行ごとに全テーブルを再構築します（インクリメンタル追加には対応していません）
+
+## 開発
+
+```bash
+# リンター
 uv run ruff check src/
 
-# Run tests
+# テスト
 uv run pytest -v
+
+# インポート検証
+uv run python -c "import hermes_bedrock_agent; print(hermes_bedrock_agent.__version__)"
+
+# CLI ヘルプ
+uv run python -m hermes_bedrock_agent.cli --help
 ```
+
+## ライセンス
+
+社内利用限定。
