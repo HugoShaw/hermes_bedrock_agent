@@ -28,15 +28,16 @@ def retrieve(
     cfg: Optional[Config] = None,
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
+    project_id: str = "",
 ) -> QAResponse:
     """Step 1+2: Retrieve top-K chunks and optional graph context for a query."""
     cfg = cfg or _default_config
-    chunks = retrieve_chunks(query, top_k=top_k, cfg=cfg, store_path=store_path, collection=collection)
+    chunks = retrieve_chunks(query, top_k=top_k, cfg=cfg, store_path=store_path, collection=collection, project_id=project_id)
 
     evidence_paths = list(dict.fromkeys(c.source_pdf_s3_path for c in chunks if c.source_pdf_s3_path))
     graph_context = None
     if include_graph and chunks:
-        graph_context = fetch_graph_context(chunks, query=query)
+        graph_context = fetch_graph_context(chunks, query=query, project_id=project_id)
 
     return QAResponse(
         query=query,
@@ -54,6 +55,7 @@ def answer(
     cfg: Optional[Config] = None,
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
+    project_id: str = "",
 ) -> QAAnswerResponse:
     """Full evidence flow: retrieve → graph → evidence images → VLM answer.
 
@@ -68,13 +70,13 @@ def answer(
     cfg = cfg or _default_config
 
     # Step 1: Markdown chunk retrieval
-    chunks = retrieve_chunks(query, top_k=top_k, cfg=cfg, store_path=store_path, collection=collection)
+    chunks = retrieve_chunks(query, top_k=top_k, cfg=cfg, store_path=store_path, collection=collection, project_id=project_id)
     logger.info("Retrieved %d chunks", len(chunks))
 
     # Step 2: Dual-layer graph context retrieval
     dual_graph: Optional[DualGraphContext] = None
     if include_graph and chunks:
-        dual_graph = fetch_dual_graph_context(chunks, query=query)
+        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=project_id)
         if dual_graph:
             logger.info(
                 "Graph context: business=%d/%d, implementation=%d/%d (nodes/edges)",

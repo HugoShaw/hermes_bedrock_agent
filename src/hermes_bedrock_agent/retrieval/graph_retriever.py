@@ -74,12 +74,14 @@ class DualGraphContext:
         )
 
 
-def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str) -> GraphContext:
+def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, project_id: str = "") -> GraphContext:
     """Layer 1: Business Semantic Graph — systems, data flows, sheet relationships."""
     seen_nodes: set[str] = set()
     seen_edges: set[tuple] = set()
     nodes: list[dict] = []
     edges: list[dict] = []
+    pid_filter = f" AND n.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
+    pid_filter_a = f" AND a.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
 
     def _add_node(nd: dict) -> None:
         nid = nd["id"]
@@ -99,7 +101,7 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str) -> G
     # Strategy A: System-level data flows
     try:
         rows = client.execute_query(
-            "MATCH (a:System)-[r:FLOWS_TO]->(b:System) RETURN a, type(r) AS rel, b LIMIT 30"
+            f"MATCH (a:System)-[r:FLOWS_TO]->(b:System) WHERE 1=1{pid_filter_a} RETURN a, type(r) AS rel, b LIMIT 30"
         ).get("results", [])
         for row in rows:
             a_nd = _node_from_row(row.get("a", {}))
@@ -115,9 +117,10 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str) -> G
     sheet_indices = list({c.sheet_index for c in chunks if c.sheet_index > 0})[:5]
     if sheet_indices:
         idx_list = ", ".join(str(i) for i in sheet_indices)
+        pid_sheet = f" AND s.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
         try:
             rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}] "
+                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_sheet} "
                 f"AND (n:System OR n:DataFlow OR n:Sheet) "
                 f"RETURN s, type(r) AS rel, n LIMIT 50"
             ).get("results", [])
@@ -139,7 +142,7 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str) -> G
         safe = name.replace("'", "\\'")
         try:
             rows = client.execute_query(
-                f"MATCH (n:System) WHERE toLower(n.name) CONTAINS toLower('{safe}') "
+                f"MATCH (n:System) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_filter} "
                 f"WITH n LIMIT 3 MATCH (n)-[r]-(m) WHERE m:System OR m:DataFlow "
                 f"RETURN n, type(r) AS rel, m LIMIT 20"
             ).get("results", [])
@@ -156,12 +159,13 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str) -> G
     return GraphContext(nodes=nodes[:60], edges=edges[:80])
 
 
-def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str) -> GraphContext:
+def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str, project_id: str = "") -> GraphContext:
     """Layer 2: Implementation Graph — APIs, fields, mapping rules, business rules."""
     seen_nodes: set[str] = set()
     seen_edges: set[tuple] = set()
     nodes: list[dict] = []
     edges: list[dict] = []
+    pid_filter = f" AND n.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
 
     def _add_node(nd: dict) -> None:
         nid = nd["id"]
@@ -182,9 +186,10 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
     sheet_indices = list({c.sheet_index for c in chunks if c.sheet_index > 0})[:5]
     if sheet_indices:
         idx_list = ", ".join(str(i) for i in sheet_indices)
+        pid_sheet = f" AND s.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
         try:
             rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}] "
+                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_sheet} "
                 f"AND (n:API OR n:Field OR n:MappingRule OR n:BusinessRule) "
                 f"RETURN s, type(r) AS rel, n LIMIT 60"
             ).get("results", [])
@@ -206,7 +211,7 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
         safe = name.replace("'", "\\'")
         try:
             rows = client.execute_query(
-                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}') "
+                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_filter} "
                 f"AND (n:API OR n:Field OR n:MappingRule OR n:BusinessRule) "
                 f"WITH n LIMIT 5 MATCH (n)-[r]-(m) RETURN n, type(r) AS rel, m LIMIT 30"
             ).get("results", [])
@@ -222,10 +227,11 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
 
     # Strategy C: Mapping rules with conditions
     if any(c.chunk_type in ("mapping_table", "data_condition", "business_rule") for c in chunks):
+        pid_rule = f" AND r.project_id = '{project_id.replace(chr(39), chr(39)*2)}'" if project_id else ""
         try:
             rows = client.execute_query(
-                "MATCH (r:MappingRule)-[rel:HAS_CONDITION]->(c:BusinessRule) "
-                "RETURN r, type(rel) AS rel_type, c LIMIT 20"
+                f"MATCH (r:MappingRule)-[rel:HAS_CONDITION]->(c:BusinessRule) WHERE 1=1{pid_rule} "
+                f"RETURN r, type(rel) AS rel_type, c LIMIT 20"
             ).get("results", [])
             for row in rows:
                 r_nd = _node_from_row(row.get("r", {}))
@@ -243,6 +249,7 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
 def fetch_dual_graph_context(
     chunks: list[RetrievedChunk],
     query: str = "",
+    project_id: str = "",
 ) -> Optional[DualGraphContext]:
     """Retrieve two-layer graph context: business semantic + implementation."""
     try:
@@ -253,8 +260,8 @@ def fetch_dual_graph_context(
             return None
 
         dual = DualGraphContext()
-        dual.business = _fetch_business_graph(client, chunks, query)
-        dual.implementation = _fetch_implementation_graph(client, chunks, query)
+        dual.business = _fetch_business_graph(client, chunks, query, project_id=project_id)
+        dual.implementation = _fetch_implementation_graph(client, chunks, query, project_id=project_id)
 
         logger.info(
             "Dual graph context: business=%d nodes/%d edges, implementation=%d nodes/%d edges",
@@ -271,9 +278,10 @@ def fetch_dual_graph_context(
 def fetch_graph_context(
     chunks: list[RetrievedChunk],
     query: str = "",
+    project_id: str = "",
 ) -> Optional[GraphContext]:
     """Legacy single-layer graph retrieval — calls dual and merges."""
-    dual = fetch_dual_graph_context(chunks, query)
+    dual = fetch_dual_graph_context(chunks, query, project_id=project_id)
     if dual is None:
         return None
     return dual.to_merged_context()

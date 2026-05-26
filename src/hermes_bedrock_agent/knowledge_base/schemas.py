@@ -22,6 +22,7 @@ class Chunk(BaseModel):
     apis: list[str] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
     embedding_text: str
+    project_id: str = ""
 
 
 class EmbeddedChunk(Chunk):
@@ -53,6 +54,7 @@ class RetrievedChunk(BaseModel):
     score: float
     source_pdf_s3_path: str
     source_excel_s3_path: str
+    project_id: str = ""
 
 
 class GraphContext(BaseModel):

@@ -114,6 +114,7 @@ class _Session:
         self.last_ts: Optional[float] = None
         self.catalog: list[dict] = []
         self.catalog_dir: Optional[Path] = None
+        self.project_id: str = ""
 
 
 def _load_catalog(catalog_dir: Optional[Path]) -> list[dict]:
@@ -137,10 +138,12 @@ def _sheet_content(catalog_dir: Path, sheet_1based: int) -> Optional[str]:
 
 def _print_header(s: _Session, collection: str, model_id: str) -> None:
     ev = "ON" if s.evidence else "OFF"
+    project_line = f"  Project: {s.project_id}" if s.project_id else "  Project: (all)"
     header = _c(_box([
         "  Dual-RAG QA Terminal",
         f"  Model: {model_id}",
         f"  Collection: {collection}",
+        project_line,
         f"  Mode: {s.mode} | Top-K: {s.top_k} | Evidence: {ev}",
     ], width=54), BCYAN)
     print(header)
@@ -277,6 +280,7 @@ def _cmd_stats(s: _Session) -> None:
         ("Last query", ts),
         ("Mode", s.mode),
         ("Top-K", str(s.top_k)),
+        ("Project", s.project_id or "(all)"),
         ("Verbose", "ON" if s.verbose else "OFF"),
         ("Evidence", "ON" if s.evidence else "OFF"),
     ]
@@ -323,7 +327,7 @@ def _run_retrieve(query: str, s: _Session) -> None:
 
     t0 = time.time()
     with _Spinner("Retrieving chunks…"):
-        resp = retrieve(query=query, top_k=s.top_k, include_graph=False)
+        resp = retrieve(query=query, top_k=s.top_k, include_graph=False, project_id=s.project_id)
     elapsed = time.time() - t0
     _step("Retrieving chunks", elapsed)
     s.total_latency += elapsed
@@ -340,7 +344,7 @@ def _run_answer(query: str, s: _Session) -> None:
 
     # Step 1: Markdown chunk retrieval
     with _Spinner("① Retrieving Markdown chunks…"):
-        chunks = retrieve_chunks(query=query, top_k=s.top_k)
+        chunks = retrieve_chunks(query=query, top_k=s.top_k, project_id=s.project_id)
     t1 = time.time()
     _step("① Markdown chunk retrieval", t1 - t0)
     _print_chunks(chunks, verbose=s.verbose)
@@ -348,7 +352,7 @@ def _run_answer(query: str, s: _Session) -> None:
     # Step 2: Dual-layer graph context retrieval
     dual_graph = None
     with _Spinner("②③ Retrieving graph context (business + implementation)…"):
-        dual_graph = fetch_dual_graph_context(chunks, query=query) if chunks else None
+        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=s.project_id) if chunks else None
     t2 = time.time()
     _step("②③ Graph context retrieval", t2 - t1)
     if dual_graph and not dual_graph.is_empty:
@@ -394,8 +398,8 @@ def _run_graph(query: str, s: _Session) -> None:
 
     t0 = time.time()
     with _Spinner("Retrieving chunks + dual graph…"):
-        chunks = retrieve_chunks(query=query, top_k=s.top_k)
-        dual_graph = fetch_dual_graph_context(chunks, query=query) if chunks else None
+        chunks = retrieve_chunks(query=query, top_k=s.top_k, project_id=s.project_id)
+        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=s.project_id) if chunks else None
     elapsed = time.time() - t0
     _step("Retrieving chunks + dual graph", elapsed)
     s.total_latency += elapsed
@@ -513,7 +517,7 @@ def _setup_readline() -> None:
         pass
 
 
-def run_terminal(catalog_dir: Optional[Path] = None) -> None:
+def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "") -> None:
     """Launch the interactive QA terminal."""
     from ..config import config
 
@@ -524,6 +528,7 @@ def run_terminal(catalog_dir: Optional[Path] = None) -> None:
     session = _Session()
     session.catalog_dir = catalog_dir
     session.catalog = _load_catalog(catalog_dir)
+    session.project_id = project_id
 
     os.system("clear")
     _print_header(session, collection, model_id)
@@ -536,7 +541,8 @@ def run_terminal(catalog_dir: Optional[Path] = None) -> None:
     while True:
         try:
             mode_c = _MODE_COLORS.get(session.mode, BWHITE)
-            prompt = f"{_rl(f'[{session.mode}]', mode_c)} {_rl('Query', BOLD + BWHITE)}{_rl('>', DIM)} "
+            proj_str = f" {_rl(f'@{session.project_id}', DIM)}" if session.project_id else ""
+            prompt = f"{_rl(f'[{session.mode}]', mode_c)}{proj_str} {_rl('Query', BOLD + BWHITE)}{_rl('>', DIM)} "
             raw = input(prompt).strip()
         except (EOFError, KeyboardInterrupt):
             print(_c("\n\nGoodbye!", BCYAN))
@@ -548,5 +554,10 @@ def run_terminal(catalog_dir: Optional[Path] = None) -> None:
         if raw.startswith("/"):
             if not _handle_command(raw, session, model_id, collection):
                 break
+        elif raw.startswith("@project "):
+            # Quick project switch: @project <project_id>
+            new_pid = raw[len("@project "):].strip()
+            session.project_id = new_pid
+            print(_c(f"  Project → {new_pid or '(all)'}", BGREEN))
         else:
             _handle_query(raw, session)

@@ -35,11 +35,17 @@ def _setup_logging(level: str = "INFO") -> None:
 # parse command
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _derive_project_id(s3_prefix: str) -> str:
+    """Derive project_id from S3 prefix: strip trailing slash, use prefix as-is."""
+    return s3_prefix.strip("/")
+
+
 @app.command()
 def parse(
     file: Optional[Path] = typer.Option(None, "--file", "-f", help="Local Excel/PDF file to parse"),
     s3_prefix: Optional[str] = typer.Option(None, "--s3-prefix", help="S3 prefix to scan for Excel files"),
     output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output base directory"),
+    project_id: Optional[str] = typer.Option(None, "--project-id", help="Project ID (derived from --s3-prefix if omitted)"),
     stages: str = typer.Option("all", "--stages", help="Stages: all|parse|ingest|images|vlm"),
     mode: str = typer.Option("append", "--mode", help="LanceDB write mode: append|replace|rebuild"),
     skip_graph: bool = typer.Option(False, "--skip-graph", help="Skip Neptune graph stage"),
@@ -53,6 +59,11 @@ def parse(
         console.print("[red]Error:[/red] Provide --file or --s3-prefix")
         raise typer.Exit(1)
 
+    # Derive project_id if not provided
+    effective_project_id = project_id or ""
+    if not effective_project_id and s3_prefix:
+        effective_project_id = _derive_project_id(s3_prefix)
+
     from .config import config
     from .parsing.excel_parser import convert_excel_to_pdfs
     from .parsing.pdf_parser import render_all_sheets
@@ -61,7 +72,10 @@ def parse(
 
     from datetime import datetime
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = output_dir or Path(f"outputs/run_{ts}")
+    if effective_project_id and not output_dir:
+        run_dir = Path(f"outputs/{effective_project_id}/run_{ts}")
+    else:
+        run_dir = output_dir or Path(f"outputs/run_{ts}")
     run_dir.mkdir(parents=True, exist_ok=True)
 
     xlsx_paths: list[tuple[Path, str]] = []
@@ -123,6 +137,7 @@ def build_kb(
     workbook_name: str = typer.Option("", "--workbook", "-w", help="Workbook name for metadata"),
     s3_excel_key: str = typer.Option("", "--s3-excel-key", help="S3 key for the source Excel file"),
     output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory for chunks.jsonl"),
+    project_id: Optional[str] = typer.Option(None, "--project-id", help="Project ID for multi-project isolation"),
     skip_vector: bool = typer.Option(False, "--skip-vector", help="Skip LanceDB embedding"),
     skip_graph: bool = typer.Option(False, "--skip-graph", help="Skip Neptune graph loading"),
     dry_run_graph: bool = typer.Option(False, "--dry-run-graph", help="Extract graph but don't write to Neptune"),
@@ -153,6 +168,7 @@ def build_kb(
     mapping_csv = parsed_path.parent / "sheet_name_mapping.csv"
 
     logger.info("Step 1: Building dataset from %s", parsed_path)
+    effective_project_id = project_id or ""
     chunks = build_chunks(
         vlm_parsed_dir=parsed_path,
         sheet_name_mapping_csv=mapping_csv if mapping_csv.exists() else None,
@@ -162,6 +178,7 @@ def build_kb(
         s3_vlm_prefix=f"outputs/{wb_name}/vlm_parsed",
         s3_excel_key=s3_excel_key,
         output_path=chunks_jsonl,
+        project_id=effective_project_id,
     )
     console.print(f"Chunks built: [cyan]{len(chunks)}[/cyan] → {chunks_jsonl}")
 
@@ -173,7 +190,7 @@ def build_kb(
 
     if not skip_vector:
         logger.info("Step 2: Loading vector store")
-        written = load_vector_store(chunks)
+        written = load_vector_store(chunks, project_id=effective_project_id)
         results["vector_written"] = written
         console.print(f"LanceDB: [cyan]{written}[/cyan] records written")
     else:
@@ -181,7 +198,7 @@ def build_kb(
 
     if not skip_graph:
         logger.info("Step 3: Building knowledge graph")
-        graph_stats = build_graph(chunks, dry_run=dry_run_graph, use_llm=use_llm_graph, delay_seconds=graph_delay)
+        graph_stats = build_graph(chunks, dry_run=dry_run_graph, use_llm=use_llm_graph, delay_seconds=graph_delay, project_id=effective_project_id)
         results["graph"] = graph_stats
         mode_str = "LLM" if use_llm_graph else "keyword"
         console.print(
@@ -210,6 +227,7 @@ def build_kb(
 def qa(
     query: Optional[str] = typer.Argument(None, help="One-shot query (omit for interactive mode)"),
     catalog_dir: Optional[Path] = typer.Option(None, "--catalog-dir", help="Dir with sheet_name_mapping.csv + vlm_parsed/"),
+    project_id: Optional[str] = typer.Option(None, "--project-id", help="Project ID to scope retrieval (required for multi-project)"),
     mode: str = typer.Option("answer", "--mode", "-m", help="Mode: retrieve|answer|graph"),
     top_k: int = typer.Option(5, "--top-k", "-k", help="Number of chunks to retrieve"),
     no_graph: bool = typer.Option(False, "--no-graph", help="Skip Neptune graph context"),
@@ -218,18 +236,19 @@ def qa(
     """Stage 3: Interactive QA terminal or one-shot query."""
     _setup_logging(log_level)
 
+    effective_project_id = project_id or ""
     if query:
         # One-shot mode
         from .retrieval.query_router import answer as do_answer, retrieve, format_response
         if mode == "answer":
-            resp = do_answer(query, top_k=top_k, include_graph=not no_graph)
+            resp = do_answer(query, top_k=top_k, include_graph=not no_graph, project_id=effective_project_id)
         else:
-            resp = retrieve(query, top_k=top_k, include_graph=(mode == "graph"))
+            resp = retrieve(query, top_k=top_k, include_graph=(mode == "graph"), project_id=effective_project_id)
         print(format_response(resp, verbose=True))
     else:
         # Interactive terminal
         from .qa.terminal import run_terminal
-        run_terminal(catalog_dir=catalog_dir)
+        run_terminal(catalog_dir=catalog_dir, project_id=effective_project_id)
 
 
 def main() -> None:

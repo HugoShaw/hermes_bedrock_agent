@@ -48,6 +48,7 @@ def _lancedb_schema() -> pa.Schema:
         pa.field("systems", pa.string()),
         pa.field("apis", pa.string()),
         pa.field("related_sheets", pa.string()),
+        pa.field("project_id", pa.string()),
     ])
 
 
@@ -66,6 +67,7 @@ def _chunk_to_row(chunk: Chunk, embedding: list[float]) -> dict:
         "systems": json.dumps(chunk.systems, ensure_ascii=False),
         "apis": json.dumps(chunk.apis, ensure_ascii=False),
         "related_sheets": json.dumps(chunk.related_sheets),
+        "project_id": chunk.project_id,
     }
 
 
@@ -75,6 +77,7 @@ def load_vector_store(
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
     batch_size: int = 25,
+    project_id: str = "",
 ) -> int:
     """Embed all chunks and upsert into LanceDB. Returns number of records written."""
     cfg = cfg or _default_config
@@ -85,10 +88,23 @@ def load_vector_store(
     db = lancedb.connect(db_path)
 
     if coll_name in db.table_names():
-        db.drop_table(coll_name)
-        logger.info("Dropped existing table '%s' for clean rebuild", coll_name)
-
-    table = db.create_table(coll_name, schema=_lancedb_schema())
+        table = db.open_table(coll_name)
+        if project_id:
+            # Delete only rows belonging to this project, preserving other projects
+            safe_pid = project_id.replace("'", "\\'")
+            try:
+                table.delete(f"project_id = '{safe_pid}'")
+                logger.info("Deleted existing rows for project '%s' from '%s'", project_id, coll_name)
+            except Exception as exc:
+                logger.warning("Could not delete project rows (may be old schema): %s", exc)
+                db.drop_table(coll_name)
+                table = db.create_table(coll_name, schema=_lancedb_schema())
+        else:
+            db.drop_table(coll_name)
+            logger.info("Dropped existing table '%s' for clean rebuild", coll_name)
+            table = db.create_table(coll_name, schema=_lancedb_schema())
+    else:
+        table = db.create_table(coll_name, schema=_lancedb_schema())
     bedrock = _get_bedrock_client(cfg.aws_region)
     rows: list[dict] = []
     errors = 0
@@ -121,6 +137,7 @@ def query_vector_store(
     top_k: int = 5,
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
+    project_id: str = "",
 ) -> list[dict]:
     """Query LanceDB with a text query; returns top-k results with metadata."""
     cfg = cfg or _default_config
@@ -134,4 +151,8 @@ def query_vector_store(
     bedrock = _get_bedrock_client(cfg.aws_region)
     query_embedding = _embed_text(bedrock, cfg.embed_model_id, query_text)
     table = db.open_table(coll_name)
-    return table.search(query_embedding).limit(top_k).to_list()
+    query = table.search(query_embedding)
+    if project_id:
+        safe_pid = project_id.replace("'", "\\'")
+        query = query.where(f"project_id = '{safe_pid}'", prefilter=True)
+    return query.limit(top_k).to_list()

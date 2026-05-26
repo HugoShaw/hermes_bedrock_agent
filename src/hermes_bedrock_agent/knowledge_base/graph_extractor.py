@@ -342,6 +342,8 @@ def _extract_business_graph_llm(
         props["sheet_index"] = chunk.sheet_index
         props["sheet_name"] = chunk.sheet_name
         props["workbook_name"] = chunk.workbook_name
+        if chunk.project_id:
+            props["project_id"] = chunk.project_id
         nodes.append(GraphNode(
             node_id=node_id,
             label=raw_node.get("label", "BusinessProcess"),
@@ -359,6 +361,8 @@ def _extract_business_graph_llm(
         props.update(raw_edge.get("properties", {}))
         props["chunk_id"] = chunk.chunk_id
         props["sheet_index"] = chunk.sheet_index
+        if chunk.project_id:
+            props["project_id"] = chunk.project_id
         edges.append(GraphEdge(
             from_id=from_id,
             to_id=to_id,
@@ -414,6 +418,8 @@ def _extract_implementation_graph_llm(
         props["sheet_name"] = chunk.sheet_name
         props["chunk_id"] = chunk.chunk_id
         props["workbook_name"] = chunk.workbook_name
+        if chunk.project_id:
+            props["project_id"] = chunk.project_id
         nodes.append(GraphNode(
             node_id=node_id,
             label=raw_node.get("label", "SourceField"),
@@ -432,6 +438,8 @@ def _extract_implementation_graph_llm(
             props = {}
         props["chunk_id"] = chunk.chunk_id
         props["sheet_index"] = chunk.sheet_index
+        if chunk.project_id:
+            props["project_id"] = chunk.project_id
         edges.append(GraphEdge(
             from_id=from_id,
             to_id=to_id,
@@ -462,23 +470,32 @@ def _extract_entities_keyword(chunk: Chunk) -> tuple[list[GraphNode], list[Graph
 
     clean_name = re.sub(r"[^\w]", "_", chunk.sheet_name)[:40]
     sheet_node_id = f"Sheet_sheet{chunk.sheet_index:02d}_{clean_name}"
+    sheet_props: dict = {"sheet_index": chunk.sheet_index, "workbook_name": chunk.workbook_name}
+    if chunk.project_id:
+        sheet_props["project_id"] = chunk.project_id
     nodes.append(GraphNode(
         node_id=sheet_node_id, label="Sheet", name=chunk.sheet_name,
-        properties={"sheet_index": chunk.sheet_index, "workbook_name": chunk.workbook_name},
+        properties=sheet_props,
         evidence_pdf_s3_path=pdf_path,
     ))
 
     for sys_kw in chunk.systems:
         canonical = _SYSTEM_CANONICAL.get(sys_kw, sys_kw)
         sys_node_id = f"System_{canonical}"
+        sys_props: dict = {"source_keyword": sys_kw}
+        if chunk.project_id:
+            sys_props["project_id"] = chunk.project_id
         nodes.append(GraphNode(
             node_id=sys_node_id, label="System", name=canonical,
-            properties={"source_keyword": sys_kw},
+            properties=sys_props,
             evidence_pdf_s3_path=pdf_path,
         ))
+        edge_props: dict = {"chunk_id": chunk.chunk_id}
+        if chunk.project_id:
+            edge_props["project_id"] = chunk.project_id
         edges.append(GraphEdge(
             from_id=sheet_node_id, to_id=sys_node_id, relationship="REFERENCES",
-            properties={"chunk_id": chunk.chunk_id},
+            properties=edge_props,
             evidence_pdf_s3_path=pdf_path,
         ))
 
@@ -542,6 +559,7 @@ def extract_business_graph(
             apis=representative.apis,
             fields=representative.fields,
             embedding_text="",
+            project_id=representative.project_id,
         )
 
         logger.info("Business graph: sheet %d (%s) — %d chars", sheet_idx, representative.sheet_name, len(merged_text))

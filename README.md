@@ -543,8 +543,68 @@ soffice --headless --accept="socket,host=localhost,port=2002;urp;" --norestore &
 ### 既知の制限
 
 1. `chunker.py` はシート番号 1-27 をハードコードしています（将来的に動的検出に改善予定）
-2. グラフ抽出はルールベース + キーワードマッチング（LLM 抽出は大規模ワークロードではコスト高）
-3. ベクトル検索は build-kb 実行ごとに全テーブルを再構築します（インクリメンタル追加には対応していません）
+2. グラフ抽出はルールベース + キーワードマッチング（LLM 抽出は `--use-llm-graph` で利用可能だが大規模ワークロードではコスト高）
+3. ~~ベクトル検索は build-kb 実行ごとに全テーブルを再構築します~~ → プロジェクト単位で分離済み（v1.1.0）
+
+## 7. マルチプロジェクト分離 (Multi-Project Isolation)
+
+本番環境では数百〜数十万のプロジェクトが存在し、各プロジェクトのドキュメントは独立したナレッジスコープとして扱われます。
+
+### 設計方針
+
+- `project_id` は S3 プレフィックスから自動導出（例: `s3://bucket/murata/205_order/` → `project_id = "murata/205_order"`）
+- `--project-id` オプションで明示的に指定も可能
+- LanceDB: `project_id` カラムで WHERE フィルタリング（1テーブルで全プロジェクト管理）
+- Neptune: 全ノード/エッジに `project_id` プロパティを付与し、openCypher WHERE 句でフィルタ
+- **プロジェクト間のデータ汚染なし** — build-kb は指定プロジェクトの行のみ削除・再構築
+
+### 使用方法
+
+```bash
+# 1. S3 プレフィックスからドキュメント解析（project_id 自動導出）
+uv run python -m hermes_bedrock_agent.cli parse \
+  --s3-prefix "murata/205_order" \
+  --project-id "murata_205_order"
+
+# 2. 解析済み Markdown から KB 構築（プロジェクト限定）
+uv run python -m hermes_bedrock_agent.cli build-kb \
+  outputs/murata_205_order/run_XXX/wb_name/vlm_parsed/ \
+  --project-id "murata_205_order" \
+  --use-llm-graph
+
+# 3. プロジェクト限定 QA ターミナル起動
+uv run python -m hermes_bedrock_agent.cli qa --project-id "murata_205_order"
+
+# 4. ワンショットクエリ（プロジェクト限定）
+uv run python -m hermes_bedrock_agent.cli qa \
+  --project-id "murata_205_order" \
+  "SAP発注データのフロー"
+```
+
+### QA ターミナル内でのプロジェクト切替
+
+```
+[answer] @murata_205_order Query> 発注データ
+# プロジェクト切替:
+@project another_project
+[answer] @another_project Query> 別のプロジェクトの質問
+```
+
+### 検証手順
+
+```bash
+# プロジェクト分離が正しく動作していることの確認:
+uv run python scripts/demo_qa_evidence_flow.py \
+  --project-id "murata_205_order" \
+  --no-answer "発注データ"
+# → project_id=murata_205_order のチャンクのみが返される
+
+# 存在しない project_id では 0 件:
+uv run python scripts/demo_qa_evidence_flow.py \
+  --project-id "nonexistent" \
+  --no-answer "発注データ"
+# → 0 results
+```
 
 ## 開発
 

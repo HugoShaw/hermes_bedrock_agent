@@ -149,6 +149,7 @@ def build_chunks(
     s3_excel_key: str,
     output_path: Path,
     cfg: Optional[Config] = None,
+    project_id: str = "",
 ) -> list[Chunk]:
     """Read all parsed markdown files, split into chunks, write chunks.jsonl."""
     cfg = cfg or _default_config
@@ -210,6 +211,7 @@ def build_chunks(
                 apis=apis,
                 fields=fields,
                 embedding_text=embedding_text,
+                project_id=project_id,
             ))
 
         logger.info("Sheet %s (%s): %d chunks", nn, sheet_name, len(text_chunks))
@@ -234,6 +236,7 @@ def build_chunks(
                 related_sheets=list(range(1, 28)),
                 systems=systems, apis=apis, fields=[],
                 embedding_text=embedding_text,
+                project_id=project_id,
             ))
         logger.info("cross_sheet_summary: %d chunks", len(cross_chunks))
 

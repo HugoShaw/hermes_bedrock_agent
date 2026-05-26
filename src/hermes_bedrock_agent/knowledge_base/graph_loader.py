@@ -112,6 +112,7 @@ def build_graph(
     dry_run: bool = False,
     use_llm: bool = False,
     delay_seconds: float = 3.0,
+    project_id: str = "",
 ) -> dict[str, int]:
     """Extract entities from all chunks and load into Neptune.
 

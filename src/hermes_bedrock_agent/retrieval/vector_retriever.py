@@ -18,12 +18,14 @@ def retrieve_chunks(
     cfg: Optional[Config] = None,
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
+    project_id: str = "",
 ) -> list[RetrievedChunk]:
     """Retrieve top-K chunks from LanceDB for a text query."""
     cfg = cfg or _default_config
     raw_results = query_vector_store(
         query_text=query, cfg=cfg, top_k=top_k,
         store_path=store_path, collection=collection,
+        project_id=project_id,
     )
 
     chunks: list[RetrievedChunk] = []
@@ -39,5 +41,6 @@ def retrieve_chunks(
             score=round(score, 4),
             source_pdf_s3_path=row.get("source_pdf_s3_path", ""),
             source_excel_s3_path=row.get("source_excel_s3_path", ""),
+            project_id=row.get("project_id", project_id),
         ))
     return chunks

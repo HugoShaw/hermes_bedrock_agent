@@ -295,6 +295,7 @@ def generate_answer(
     business_graph: Optional[GraphContext] = None,
     implementation_graph: Optional[GraphContext] = None,
     cfg: Optional[Config] = None,
+    project_id: str = "",
 ) -> QAAnswerResponse:
     """Call Bedrock Converse with full evidence pack to generate a grounded answer.
 

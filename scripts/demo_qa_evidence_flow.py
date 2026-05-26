@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--no-graph", action="store_true", help="Skip graph context retrieval")
     parser.add_argument("--no-answer", action="store_true", help="Skip VLM answer generation (retrieval only)")
     parser.add_argument("--verbose", action="store_true", help="Show full chunk content")
+    parser.add_argument("--project-id", default="", help="Project ID to scope retrieval")
     args = parser.parse_args()
 
     from hermes_bedrock_agent.config import config
@@ -67,7 +68,7 @@ def main():
     # ────────────────────────────────────────────────────────────────────
     print(_divider("① Markdown Chunk Retrieval"))
     t0 = time.time()
-    chunks = retrieve_chunks(args.query, top_k=args.top_k)
+    chunks = retrieve_chunks(args.query, top_k=args.top_k, project_id=args.project_id)
     t1 = time.time()
     print(f"  Retrieved {len(chunks)} chunks in {t1-t0:.2f}s\n")
 
@@ -86,7 +87,7 @@ def main():
     if not args.no_graph:
         print(_divider("②③ Dual Graph Context Retrieval"))
         t2 = time.time()
-        dual_graph = fetch_dual_graph_context(chunks, query=args.query)
+        dual_graph = fetch_dual_graph_context(chunks, query=args.query, project_id=args.project_id)
         t3 = time.time()
 
         if dual_graph and not dual_graph.is_empty:
