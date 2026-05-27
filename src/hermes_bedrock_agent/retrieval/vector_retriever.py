@@ -31,6 +31,8 @@ def retrieve_chunks(
     chunks: list[RetrievedChunk] = []
     for row in raw_results:
         distance = row.get("_distance", 0.0)
+        # LanceDB returns cosine distance ∈ [0, 2]. Convert to similarity ∈ [0, 1].
+        # Values > 1.0 occur due to ANN approximation; clamp to 0.
         score = max(0.0, 1.0 - distance)
         chunks.append(RetrievedChunk(
             chunk_id=row.get("id", ""),

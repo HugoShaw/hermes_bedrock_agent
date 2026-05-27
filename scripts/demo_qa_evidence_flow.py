@@ -76,7 +76,7 @@ def main():
     print(f"  Retrieved {len(chunks)} chunks in {t1-t0:.2f}s\n")
 
     for i, chunk in enumerate(chunks, 1):
-        print(f"  [{i}] sheet={chunk.sheet_index} name={chunk.sheet_name} type={chunk.chunk_type} score={chunk.score:.4f}")
+        print(f"  [{i}] sheet={chunk.sheet_index} name={chunk.sheet_name} type={chunk.chunk_type} cosine_sim={chunk.score:.4f}")
         print(f"      PDF evidence: {chunk.source_pdf_s3_path}")
         if args.verbose:
             preview = chunk.content[:200].replace("\n", " ")

@@ -147,7 +147,7 @@ def convert_excel_to_pdfs(
     for i in range(n_sheets):
         name, max_col, max_row, has_shapes = _get_sheet_info(doc, i)
         safe_name = f"sheet_{i + 1:02d}"
-        pdf_path = os.path.join(output_dir, f"{safe_name}.pdf")
+        pdf_path = os.path.abspath(os.path.join(output_dir, f"{safe_name}.pdf"))
 
         logger.info("  [%02d/%d] %s (%dc x %dr)…", i + 1, n_sheets, name, max_col, max_row)
 
