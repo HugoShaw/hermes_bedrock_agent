@@ -42,8 +42,26 @@ def _setup_logging(level: str = "INFO") -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _derive_project_id(s3_prefix: str) -> str:
-    """Derive project_id from S3 prefix: strip trailing slash, use prefix as-is."""
-    return s3_prefix.strip("/")
+    """Derive project_id from S3 prefix: extract the last path component (directory name).
+
+    Examples:
+        s3://s3-hulftchina-rd/サンプル20260519/ → サンプル20260519
+        s3://s3-hulftchina-rd/14_債務奉行クラウド/ → 14_債務奉行クラウド
+        サンプル20260519/ → サンプル20260519
+    """
+    # Strip protocol and bucket if present
+    cleaned = s3_prefix
+    if cleaned.startswith("s3://"):
+        # Remove s3://bucket/ prefix
+        cleaned = cleaned[5:]
+        # Remove the bucket name (everything before first /)
+        _, _, cleaned = cleaned.partition("/")
+    # Strip trailing and leading slashes, then take the last path component
+    cleaned = cleaned.strip("/")
+    # If there are still path separators, take the last component
+    if "/" in cleaned:
+        cleaned = cleaned.rsplit("/", 1)[-1]
+    return cleaned
 
 
 @app.command()
