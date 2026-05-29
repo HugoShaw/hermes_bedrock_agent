@@ -1,4 +1,8 @@
-"""LLM-based graph extraction from parsed Markdown chunks.
+"""[LEGACY] LLM-based graph extraction from parsed Markdown chunks.
+
+DEPRECATED: This module is superseded by hermes_bedrock_agent.graph_pipeline.
+Use the new pipeline: `dualrag graph <project-dir>` or import from graph_pipeline.
+Kept for backward compatibility with the `dualrag build-kb` flow.
 
 Two-pass extraction using Claude Sonnet:
   Pass 1: Business Semantic Graph — high-level systems, processes, data flows

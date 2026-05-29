@@ -75,7 +75,14 @@ class DualGraphContext:
 
 
 def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, project_id: str = "") -> GraphContext:
-    """Layer 1: Business Semantic Graph — systems, data flows, sheet relationships."""
+    """Layer 1: Business Semantic Graph — systems, data flows, sheet relationships.
+
+    Adapted for new graph schema:
+    - Sheet.sheet_name='sheet_05' (no sheet_index property)
+    - System labels are multi: ['System', 'ExternalSystem']
+    - Edge types: SENDS_TO, USES_SYSTEM, SYSTEM_HAS_INTERFACE (no FLOWS_TO)
+    - Many nodes lack project_id (connected via Workbook/Project relationships)
+    """
     seen_nodes: set[str] = set()
     seen_edges: set[tuple] = set()
     nodes: list[dict] = []
@@ -83,15 +90,6 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
 
     if not project_id:
         logger.warning("_fetch_business_graph: no project_id — graph query may return cross-project data")
-
-    # Build project_id filter fragments for different variable names
-    # Using parameterized-style string injection (safe because project_id comes from CLI, not user input in queries)
-    pid_esc = project_id.replace("'", "''") if project_id else ""
-    pid_a = f" AND a.project_id = '{pid_esc}'" if project_id else ""
-    pid_b = f" AND b.project_id = '{pid_esc}'" if project_id else ""
-    pid_s = f" AND s.project_id = '{pid_esc}'" if project_id else ""
-    pid_n = f" AND n.project_id = '{pid_esc}'" if project_id else ""
-    pid_m = f" AND m.project_id = '{pid_esc}'" if project_id else ""
 
     def _add_node(nd: dict) -> None:
         nid = nd["id"]
@@ -108,10 +106,19 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
                 edge["properties"] = props
             edges.append(edge)
 
-    # Strategy A: System-level data flows (BOTH nodes filtered)
+    # Strategy A: System-level relationships (project-scoped System-System edges)
+    pid_esc_a = project_id.replace("'", "''") if project_id else ""
+    sys_pf = ""
+    if pid_esc_a:
+        sys_pf = (
+            f" AND (a.project_name = '{pid_esc_a}' OR a.project_id = '{pid_esc_a}'"
+            f" OR b.project_name = '{pid_esc_a}' OR b.project_id = '{pid_esc_a}')"
+        )
     try:
         rows = client.execute_query(
-            f"MATCH (a:System)-[r:FLOWS_TO]->(b:System) WHERE 1=1{pid_a}{pid_b} RETURN a, type(r) AS rel, b LIMIT 30"
+            "MATCH (a)-[r]-(b) WHERE 'System' IN labels(a) AND 'System' IN labels(b)"
+            f"{sys_pf} "
+            "RETURN a, type(r) AS rel, b LIMIT 30"
         ).get("results", [])
         for row in rows:
             a_nd = _node_from_row(row.get("a", {}))
@@ -119,18 +126,23 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
             _add_node(a_nd)
             _add_node(b_nd)
             if a_nd["id"] and b_nd["id"]:
-                _add_edge(a_nd["id"], b_nd["id"], row.get("rel", "FLOWS_TO"))
+                _add_edge(a_nd["id"], b_nd["id"], row.get("rel", ""))
     except Exception as exc:
         logger.debug("Business graph Strategy A failed: %s", exc)
 
-    # Strategy B: Sheet-level neighbourhood (BOTH sheet and neighbor filtered)
+    # Strategy B: Sheet-level neighbourhood (using sheet_name not sheet_index)
     sheet_indices = list({c.sheet_index for c in chunks if c.sheet_index > 0})[:5]
     if sheet_indices:
-        idx_list = ", ".join(str(i) for i in sheet_indices)
+        sheet_names = ", ".join(f"'sheet_{str(i).zfill(2)}'" for i in sheet_indices)
+        # Project filter: Sheet nodes use project_name (not project_id)
+        pid_esc = project_id.replace("'", "''") if project_id else ""
+        pf = f" AND (s.project_name = '{pid_esc}' OR s.project_id = '{pid_esc}')" if pid_esc else ""
         try:
             rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_s}{pid_n} "
-                f"AND (n:System OR n:DataFlow OR n:Sheet) "
+                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_name IN [{sheet_names}]"
+                f"{pf} "
+                f"AND ('System' IN labels(n) OR 'Sheet' IN labels(n) OR "
+                f"'BusinessProcess' IN labels(n) OR 'DataEntity' IN labels(n)) "
                 f"RETURN s, type(r) AS rel, n LIMIT 50"
             ).get("results", [])
             for row in rows:
@@ -143,16 +155,18 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
         except Exception as exc:
             logger.debug("Business graph Strategy B failed: %s", exc)
 
-    # Strategy C: Entity-name search (BOTH starting node and neighbor filtered)
+    # Strategy C: Entity-name search for System nodes
     chunk_texts = [c.content for c in chunks]
     if query:
         chunk_texts.append(query)
     for name in _extract_entity_names(chunk_texts)[:5]:
-        safe = name.replace("'", "\\'")
+        safe = name.replace("'", "''")
         try:
             rows = client.execute_query(
-                f"MATCH (n:System) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_n} "
-                f"WITH n LIMIT 3 MATCH (n)-[r]-(m) WHERE (m:System OR m:DataFlow){pid_m} "
+                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}') "
+                f"AND 'System' IN labels(n) "
+                f"WITH n LIMIT 3 MATCH (n)-[r]-(m) WHERE ('System' IN labels(m) OR "
+                f"'BusinessProcess' IN labels(m) OR 'DataEntity' IN labels(m)) "
                 f"RETURN n, type(r) AS rel, m LIMIT 20"
             ).get("results", [])
             for row in rows:
@@ -169,7 +183,13 @@ def _fetch_business_graph(client, chunks: list[RetrievedChunk], query: str, proj
 
 
 def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str, project_id: str = "") -> GraphContext:
-    """Layer 2: Implementation Graph — APIs, fields, mapping rules, business rules."""
+    """Layer 2: Implementation Graph — APIs, fields, mapping rules, business rules.
+
+    Adapted for new graph schema:
+    - Sheet.sheet_name='sheet_05' (no sheet_index property)
+    - Uses multi-label nodes: Interface, APIOperation, Field, MappingDefinition, etc.
+    - Many nodes lack project_id (connected via relationships)
+    """
     seen_nodes: set[str] = set()
     seen_edges: set[tuple] = set()
     nodes: list[dict] = []
@@ -177,14 +197,6 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
 
     if not project_id:
         logger.warning("_fetch_implementation_graph: no project_id — graph query may return cross-project data")
-
-    # Build project_id filter fragments for different variable names
-    pid_esc = project_id.replace("'", "''") if project_id else ""
-    pid_s = f" AND s.project_id = '{pid_esc}'" if project_id else ""
-    pid_n = f" AND n.project_id = '{pid_esc}'" if project_id else ""
-    pid_m = f" AND m.project_id = '{pid_esc}'" if project_id else ""
-    pid_r = f" AND r.project_id = '{pid_esc}'" if project_id else ""
-    pid_c = f" AND c.project_id = '{pid_esc}'" if project_id else ""
 
     def _add_node(nd: dict) -> None:
         nid = nd["id"]
@@ -201,14 +213,23 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
                 edge["properties"] = props
             edges.append(edge)
 
-    # Strategy A: Sheet→API, Sheet→Field, Sheet→Rule (BOTH nodes filtered)
+    # Strategy A: Sheet→Implementation nodes (using sheet_name not sheet_index)
     sheet_indices = list({c.sheet_index for c in chunks if c.sheet_index > 0})[:5]
     if sheet_indices:
-        idx_list = ", ".join(str(i) for i in sheet_indices)
+        sheet_names = ", ".join(f"'sheet_{str(i).zfill(2)}'" for i in sheet_indices)
+        # Project filter: Sheet nodes use project_name (not project_id)
+        pid_esc = project_id.replace("'", "''") if project_id else ""
+        pf = f" AND (s.project_name = '{pid_esc}' OR s.project_id = '{pid_esc}')" if pid_esc else ""
         try:
             rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_index IN [{idx_list}]{pid_s}{pid_n} "
-                f"AND (n:API OR n:Field OR n:MappingRule OR n:BusinessRule) "
+                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_name IN [{sheet_names}]"
+                f"{pf} "
+                f"AND ('Interface' IN labels(n) OR 'Field' IN labels(n) OR "
+                f"'MappingDefinition' IN labels(n) OR 'BusinessRule' IN labels(n) OR "
+                f"'TransformationRule' IN labels(n) OR 'APIOperation' IN labels(n) OR "
+                f"'MappingRule' IN labels(n) OR 'SourceTable' IN labels(n) OR "
+                f"'TargetTable' IN labels(n) OR 'SourceField' IN labels(n) OR "
+                f"'TargetField' IN labels(n)) "
                 f"RETURN s, type(r) AS rel, n LIMIT 60"
             ).get("results", [])
             for row in rows:
@@ -221,17 +242,19 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
         except Exception as exc:
             logger.debug("Implementation graph Strategy A failed: %s", exc)
 
-    # Strategy B: API / Field entity-name search (BOTH starting node and neighbor filtered)
+    # Strategy B: Entity-name search for implementation nodes
     chunk_texts = [c.content for c in chunks]
     if query:
         chunk_texts.append(query)
     for name in _extract_entity_names(chunk_texts)[:8]:
-        safe = name.replace("'", "\\'")
+        safe = name.replace("'", "''")
         try:
             rows = client.execute_query(
-                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}'){pid_n} "
-                f"AND (n:API OR n:Field OR n:MappingRule OR n:BusinessRule) "
-                f"WITH n LIMIT 5 MATCH (n)-[r]-(m) WHERE 1=1{pid_m} RETURN n, type(r) AS rel, m LIMIT 30"
+                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}') "
+                f"AND ('Interface' IN labels(n) OR 'Field' IN labels(n) OR "
+                f"'MappingDefinition' IN labels(n) OR 'BusinessRule' IN labels(n) OR "
+                f"'APIOperation' IN labels(n) OR 'TransformationRule' IN labels(n)) "
+                f"WITH n LIMIT 5 MATCH (n)-[r]-(m) RETURN n, type(r) AS rel, m LIMIT 30"
             ).get("results", [])
             for row in rows:
                 n_nd = _node_from_row(row.get("n", {}))
@@ -243,12 +266,14 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
         except Exception:
             continue
 
-    # Strategy C: Mapping rules with conditions (BOTH nodes filtered)
+    # Strategy C: Mapping/Business rules with relationships
     if any(c.chunk_type in ("mapping_table", "data_condition", "business_rule") for c in chunks):
         try:
             rows = client.execute_query(
-                f"MATCH (r:MappingRule)-[rel:HAS_CONDITION]->(c:BusinessRule) WHERE 1=1{pid_r}{pid_c} "
-                f"RETURN r, type(rel) AS rel_type, c LIMIT 20"
+                "MATCH (r)-[rel]-(c) "
+                "WHERE ('MappingDefinition' IN labels(r) OR 'TransformationRule' IN labels(r)) "
+                "AND ('BusinessRule' IN labels(c) OR 'Field' IN labels(c)) "
+                "RETURN r, type(rel) AS rel_type, c LIMIT 20"
             ).get("results", [])
             for row in rows:
                 r_nd = _node_from_row(row.get("r", {}))
@@ -256,7 +281,7 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
                 _add_node(r_nd)
                 _add_node(c_nd)
                 if r_nd["id"] and c_nd["id"]:
-                    _add_edge(r_nd["id"], c_nd["id"], row.get("rel_type", "HAS_CONDITION"))
+                    _add_edge(r_nd["id"], c_nd["id"], row.get("rel_type", ""))
         except Exception as exc:
             logger.debug("Implementation graph Strategy C failed: %s", exc)
 

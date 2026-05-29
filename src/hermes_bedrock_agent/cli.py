@@ -288,6 +288,61 @@ def qa(
         run_terminal(catalog_dir=catalog_dir, project_id=effective_project_id)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# graph — New graph extraction & loading pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.command()
+def graph(
+    project_dir: str = typer.Argument(..., help="Project directory containing vlm_parsed/ subdirs"),
+    project_id: str = typer.Option("", "--project-id", "-p", help="Stable project ID (ASCII, e.g. sample_20260519)"),
+    project_name: str = typer.Option("", "--project-name", "-n", help="Display project name (Japanese OK)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Generate output files but do not load into Neptune"),
+    skip_load: bool = typer.Option(False, "--skip-load", help="Skip Neptune loading step"),
+    output_dir: str = typer.Option("", "--output-dir", "-o", help="Output directory (default: <project_dir>/graph_output/)"),
+    neptune_graph_id: str = typer.Option("", "--neptune-graph-id", help="Neptune graph identifier (overrides .env)"),
+    delay: float = typer.Option(3.0, "--delay", help="Delay between LLM calls (seconds)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Extract graph from vlm_parsed/ markdown and load into Neptune.
+
+    This is the primary graph pipeline command. It replaces the old
+    `build-kb --use-llm-graph` flow with a dedicated, project-aware extraction.
+
+    Example:
+        dualrag graph outputs/サンプル20260519 --project-id sample_20260519 --dry-run
+    """
+    _setup_logging("DEBUG" if verbose else "INFO")
+    from .graph_pipeline import run_pipeline, GraphPipelineConfig
+
+    cfg = GraphPipelineConfig(
+        project_id=project_id,
+        project_name=project_name,
+        dry_run=dry_run,
+        skip_load=skip_load,
+        output_dir=output_dir,
+        llm_delay_seconds=delay,
+    )
+    if neptune_graph_id:
+        cfg.neptune_graph_id = neptune_graph_id
+
+    console.print(f"[bold]Graph Pipeline[/bold] — {project_dir}")
+    console.print(f"  project_id: {cfg.project_id or '(auto)'}")
+    console.print(f"  dry_run: {cfg.dry_run}")
+    console.print(f"  neptune: {cfg.neptune_graph_id or '(from .env)'}")
+    console.print()
+
+    result = run_pipeline(project_dir, cfg)
+
+    console.print()
+    console.print("[bold green]Pipeline complete[/bold green]")
+    console.print(f"  Nodes: {len(result.nodes)}")
+    console.print(f"  Edges: {len(result.edges)}")
+    console.print(f"  Validation issues: {len(result.validation_errors)}")
+    console.print(f"  Load stats: {result.load_stats}")
+    console.print(f"  Output dir: {result.output_dir}")
+
+
 def main() -> None:
     app()
 

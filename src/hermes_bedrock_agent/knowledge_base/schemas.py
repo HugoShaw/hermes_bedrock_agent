@@ -67,6 +67,8 @@ class QAResponse(BaseModel):
     chunks: list[RetrievedChunk] = Field(default_factory=list)
     evidence_paths: list[str] = Field(default_factory=list)
     graph_context: Optional[GraphContext] = None
+    # Graph guidance status: "strong", "weak", "none", "disabled", "error"
+    guidance_status: str = "none"
 
 
 class QAAnswerResponse(QAResponse):

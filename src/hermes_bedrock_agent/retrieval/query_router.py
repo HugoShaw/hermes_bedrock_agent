@@ -1,11 +1,17 @@
 """Route a query through the full evidence flow:
 
   User question
-    → Markdown chunk retrieval (LanceDB)
-    → Graph context retrieval (Neptune: business + implementation)
+    → Graph exploration (Neptune: find relevant subgraph)
+    → Graph-guided vector retrieval (LanceDB: filtered by graph hints)
+    → Supplemental vector retrieval (LanceDB: standard similarity)
     → PDF/PNG evidence resolution from chunk metadata
     → Evidence pack construction
     → Multimodal VLM answer generation
+
+  Fallback (Neptune unavailable):
+    → Standard vector retrieval (LanceDB)
+    → PDF/PNG evidence resolution
+    → VLM answer generation
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from typing import Optional
 
 from ..config import Config, config as _default_config
 from ..knowledge_base.schemas import QAAnswerResponse, QAResponse, RetrievedChunk
+from .graph_guided_retrieval import GraphGuidanceHints, retrieve_with_graph_guidance
 from .graph_retriever import DualGraphContext, fetch_dual_graph_context, fetch_graph_context
 from .vector_retriever import retrieve_chunks
 
@@ -30,20 +37,40 @@ def retrieve(
     collection: Optional[str] = None,
     project_id: str = "",
 ) -> QAResponse:
-    """Step 1+2: Retrieve top-K chunks and optional graph context for a query."""
+    """Step 1+2: Retrieve top-K chunks and optional graph context for a query.
+
+    Uses graph-guided retrieval when include_graph=True and Neptune is available.
+    Falls back to standard vector retrieval otherwise.
+    """
     cfg = cfg or _default_config
-    chunks = retrieve_chunks(query, top_k=top_k, cfg=cfg, store_path=store_path, collection=collection, project_id=project_id)
+
+    if include_graph:
+        # Try graph-guided retrieval (graph exploration → guided vector search)
+        chunks, dual_graph, guidance_status = retrieve_with_graph_guidance(
+            query, top_k=top_k, project_id=project_id, cfg=cfg,
+        )
+        graph_context = dual_graph.to_merged_context() if dual_graph else None
+        logger.info("Graph guidance status: %s", guidance_status)
+    else:
+        # No graph: plain vector retrieval
+        from .graph_guided_retrieval import _keyword_boost_chunks
+        chunks = retrieve_chunks(
+            query, top_k=top_k, cfg=cfg,
+            store_path=store_path, collection=collection, project_id=project_id,
+        )
+        # Apply keyword boost even without graph (helps exact-text queries)
+        chunks = _keyword_boost_chunks(chunks, query)
+        graph_context = None
+        guidance_status = "disabled"
 
     evidence_paths = list(dict.fromkeys(c.source_pdf_s3_path for c in chunks if c.source_pdf_s3_path))
-    graph_context = None
-    if include_graph and chunks:
-        graph_context = fetch_graph_context(chunks, query=query, project_id=project_id)
 
     return QAResponse(
         query=query,
         chunks=chunks,
         evidence_paths=evidence_paths,
         graph_context=graph_context,
+        guidance_status=guidance_status,
     )
 
 
@@ -57,32 +84,44 @@ def answer(
     collection: Optional[str] = None,
     project_id: str = "",
 ) -> QAAnswerResponse:
-    """Full evidence flow: retrieve → graph → evidence images → VLM answer.
+    """Full evidence flow: graph-guided retrieve → evidence images → VLM answer.
 
     Evidence pack sent to VLM:
-      1. Markdown chunks (text retrieval)
+      1. Markdown chunks (graph-guided + standard vector retrieval)
       2. Business Semantic Graph (system architecture, data flows)
       3. Implementation Graph (APIs, fields, rules, conditions)
       4. PDF/PNG evidence (visual verification)
+
+    Fallback: if Neptune is unavailable, uses standard vector retrieval only.
     """
     from .answer_generator import generate_answer, load_evidence_images
 
     cfg = cfg or _default_config
 
-    # Step 1: Markdown chunk retrieval
-    chunks = retrieve_chunks(query, top_k=top_k, cfg=cfg, store_path=store_path, collection=collection, project_id=project_id)
-    logger.info("Retrieved %d chunks", len(chunks))
+    # Step 1+2: Graph-guided retrieval (graph exploration + vector search)
+    if include_graph:
+        chunks, dual_graph, guidance_status = retrieve_with_graph_guidance(
+            query, top_k=top_k, project_id=project_id, cfg=cfg,
+        )
+    else:
+        from .graph_guided_retrieval import _keyword_boost_chunks
+        chunks = retrieve_chunks(
+            query, top_k=top_k, cfg=cfg,
+            store_path=store_path, collection=collection, project_id=project_id,
+        )
+        # Apply keyword boost even without graph (helps exact-text queries)
+        chunks = _keyword_boost_chunks(chunks, query)
+        dual_graph = None
+        guidance_status = "disabled"
 
-    # Step 2: Dual-layer graph context retrieval
-    dual_graph: Optional[DualGraphContext] = None
-    if include_graph and chunks:
-        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=project_id)
-        if dual_graph:
-            logger.info(
-                "Graph context: business=%d/%d, implementation=%d/%d (nodes/edges)",
-                len(dual_graph.business.nodes), len(dual_graph.business.edges),
-                len(dual_graph.implementation.nodes), len(dual_graph.implementation.edges),
-            )
+    logger.info("Retrieved %d chunks (graph guidance=%s)", len(chunks), guidance_status)
+
+    if dual_graph:
+        logger.info(
+            "Graph context: business=%d/%d, implementation=%d/%d (nodes/edges)",
+            len(dual_graph.business.nodes), len(dual_graph.business.edges),
+            len(dual_graph.implementation.nodes), len(dual_graph.implementation.edges),
+        )
 
     # Step 3: PDF/PNG evidence resolution from chunk metadata
     evidence_images: list = []
@@ -91,7 +130,7 @@ def answer(
         logger.info("Loaded %d evidence image(s)", len(evidence_images))
 
     # Step 4: Evidence pack construction + VLM answer generation
-    return generate_answer(
+    resp = generate_answer(
         query=query,
         retrieved_chunks=chunks,
         evidence_images=evidence_images,
@@ -100,11 +139,25 @@ def answer(
         implementation_graph=dual_graph.implementation if dual_graph else None,
         cfg=cfg,
     )
+    resp.guidance_status = guidance_status
+    return resp
 
 
 def format_response(response: QAResponse, verbose: bool = False) -> str:
     """Format a QA response for terminal display with full evidence tracing."""
-    lines: list[str] = [f"\n── Query: {response.query}", f"── Retrieved {len(response.chunks)} chunk(s)\n"]
+    lines: list[str] = [f"\n── Query: {response.query}", f"── Retrieved {len(response.chunks)} chunk(s)"]
+
+    # Show graph guidance status
+    status = getattr(response, "guidance_status", "none")
+    status_labels = {
+        "strong": "Graph guidance: ACTIVE (focused sheet filter applied)",
+        "weak": "Graph guidance: WEAK (over-broad hints, context only)",
+        "none": "Graph guidance: NONE (no graph match, pure vector retrieval)",
+        "disabled": "Graph guidance: DISABLED (--no-graph)",
+        "error": "Graph guidance: ERROR (Neptune failed, fell back to vector)",
+    }
+    lines.append(f"── {status_labels.get(status, f'Graph guidance: {status}')}")
+    lines.append("")
 
     for i, chunk in enumerate(response.chunks, 1):
         lines.append(f"[{i}] {chunk.sheet_name} (sheet {chunk.sheet_index}) — {chunk.chunk_type}")

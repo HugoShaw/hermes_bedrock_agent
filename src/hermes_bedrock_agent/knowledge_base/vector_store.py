@@ -78,8 +78,22 @@ def load_vector_store(
     collection: Optional[str] = None,
     batch_size: int = 25,
     project_id: str = "",
+    replace_project: bool = True,
 ) -> int:
-    """Embed all chunks and upsert into LanceDB. Returns number of records written."""
+    """Embed all chunks and upsert into LanceDB. Returns number of records written.
+
+    Args:
+        chunks: Chunk objects to embed and store.
+        cfg: Optional config override.
+        store_path: Optional LanceDB path override.
+        collection: Optional collection name override.
+        batch_size: Number of embeddings per API call batch.
+        project_id: Project scope for deletion/filtering.
+        replace_project: If True (default), deletes ALL existing rows for
+            this project_id before inserting. Set False to append without
+            deleting — use this when loading workbook-by-workbook into the
+            same project to avoid overwriting earlier workbooks' chunks.
+    """
     cfg = cfg or _default_config
     db_path = store_path or cfg.lancedb_path
     coll_name = collection or cfg.vector_collection
@@ -95,7 +109,7 @@ def load_vector_store(
 
     if coll_name in db.table_names():
         table = db.open_table(coll_name)
-        if project_id:
+        if project_id and replace_project:
             # Delete only rows belonging to this project, preserving other projects
             safe_pid = project_id.replace("'", "\\'")
             try:
@@ -105,10 +119,13 @@ def load_vector_store(
                 logger.warning("Could not delete project rows (may be old schema): %s", exc)
                 db.drop_table(coll_name)
                 table = db.create_table(coll_name, schema=_lancedb_schema())
-        else:
+        elif not project_id:
             db.drop_table(coll_name)
             logger.info("Dropped existing table '%s' for clean rebuild", coll_name)
             table = db.create_table(coll_name, schema=_lancedb_schema())
+        else:
+            # append_only mode: just add to existing table
+            logger.info("Appending to existing table '%s' (replace_project=False)", coll_name)
     else:
         table = db.create_table(coll_name, schema=_lancedb_schema())
     bedrock = _get_bedrock_client(cfg.aws_region)
@@ -144,8 +161,21 @@ def query_vector_store(
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
     project_id: str = "",
+    where_filter: Optional[str] = None,
 ) -> list[dict]:
-    """Query LanceDB with a text query; returns top-k results with metadata."""
+    """Query LanceDB with a text query; returns top-k results with metadata.
+
+    Args:
+        query_text: Text query to embed and search for.
+        cfg: Optional config override.
+        top_k: Number of results to return.
+        store_path: Optional LanceDB path override.
+        collection: Optional collection name override.
+        project_id: Project ID filter (scopes retrieval to one project).
+        where_filter: Optional additional SQL-like filter expression to apply
+            (e.g. "sheet_index IN (1, 2, 3)"). Combined with project_id filter
+            using AND when both are specified.
+    """
     cfg = cfg or _default_config
     db_path = store_path or cfg.lancedb_path
     coll_name = collection or cfg.vector_collection
@@ -162,8 +192,17 @@ def query_vector_store(
     bedrock = _get_bedrock_client(cfg.aws_region)
     query_embedding = _embed_text(bedrock, cfg.embed_model_id, query_text)
     table = db.open_table(coll_name)
-    query = table.search(query_embedding)
+    search = table.search(query_embedding)
+
+    # Build composite filter: project_id AND optional where_filter
+    filters: list[str] = []
     if project_id:
         safe_pid = project_id.replace("'", "\\'")
-        query = query.where(f"project_id = '{safe_pid}'", prefilter=True)
-    return query.limit(top_k).to_list()
+        filters.append(f"project_id = '{safe_pid}'")
+    if where_filter:
+        filters.append(where_filter)
+
+    if filters:
+        search = search.where(" AND ".join(filters), prefilter=True)
+
+    return search.limit(top_k).to_list()

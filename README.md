@@ -1,427 +1,722 @@
 # DualRAG — エンタープライズ設計書ドキュメント解析 & Dual-RAG ナレッジベース
 
-# DualRAG — Enterprise Design Document Parsing & Dual-RAG Knowledge Base
+Enterprise Design Document Parsing & Dual-RAG Knowledge Base
 
 ---
 
-## このプロジェクトについて / What This Project Does
+## 目次
 
-**DualRAG** は、日本企業の設計書（Excelワークブック、PDF）をAIで解析し、検索可能なナレッジベースと質問応答ターミナルを構築する完全なパイプラインです。
-
-**DualRAG** is a complete pipeline that parses Japanese enterprise design documents (Excel workbooks, PDFs) using AI, builds a searchable knowledge base, and provides a question-answering terminal.
-
-### 解決する課題 / The Problem
-
-日本企業では、Excelファイルがソフトウェア設計書として広く使用されています。これらのExcelファイルには以下の情報が含まれます：
-
-- 業務プロセス図、システムフロー図
-- データ変換ルール、インターフェース定義
-- データベーステーブルマッピング、フィールドレベルのマッピング
-- 複数システム間の連携仕様
-
-これらの知識は視覚的なスプレッドシートレイアウトに閉じ込められており、検索やクエリ、他システムとの連携が極めて困難です。
-
-### DualRAGの解決方法 / How DualRAG Solves It
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│  S3 (Excel/PDF)  ──→  画像化  ──→  AI解析  ──→  ナレッジベース  ──→  QA │
-│                                                                         │
-│  ① parse:  Excel各シートをPDF/PNG画像に変換し、Claude Sonnetで          │
-│            視覚的に理解してMarkdownを生成                                 │
-│                                                                         │
-│  ② build-kb: Markdownをチャンク分割→ベクトルDB (LanceDB) に格納         │
-│              + エンティティ/関係を抽出→グラフDB (Neptune) に格納          │
-│                                                                         │
-│  ③ qa: 質問に対して、テキスト検索+グラフ検索+元画像をAIに渡して回答      │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### なぜ「Dual-RAG」？ / Why "Dual-RAG"?
-
-| RAG方式 | 得意な質問 | 例 |
-|---------|-----------|-----|
-| **Vector RAG** (テキスト検索) | 「〇〇について教えて」 | 「仕入伝票APIのデータ形式は？」 |
-| **Graph RAG** (関係検索) | 「AとBの関連は？」 | 「SAPからANDPADへのデータフローは？」 |
-
-両方を組み合わせることで、どちらか単独では回答できない質問にも対応できます。
-
-### なぜVLM（視覚解析）？ / Why Visual Parsing?
-
-日本企業のExcel設計書は：
-- セル結合、色分け、矢印、図形で意味を伝える
-- 通常のテキスト抽出（openpyxl、pandas）では理解不可能な複雑なレイアウト
-- Excel図形で描かれたフローチャートにはテキスト表現がない
-
-画像に変換してVision-Language Model (VLM) を使うことで、従来のパーサーが見逃す**視覚的な知識**を捕捉します。
+0. [Quick Start / 最短手順](#0-quick-start--最短手順)
+1. [プロジェクト概要](#1-プロジェクト概要)
+2. [全体ワークフロー](#2-全体ワークフロー)
+3. [S3 アップロードガイド](#3-s3-アップロードガイド)
+4. [Project ID と Project Name](#4-project-id-と-project-name)
+5. [環境構築](#5-環境構築)
+6. [パイプラインの実行](#6-パイプラインの実行)
+7. [ローカル出力構造](#7-ローカル出力構造)
+8. [QA 対話ターミナル](#8-qa-対話ターミナル)
+9. [エビデンストレーシング](#9-エビデンストレーシング)
+10. [検証とトラブルシューティング](#10-検証とトラブルシューティング)
+11. [制限事項と注意点](#11-制限事項と注意点)
+12. [納品チェックリスト](#12-納品チェックリスト)
 
 ---
 
-## 目次 / Table of Contents
+## 0. Quick Start / 最短手順
 
-1. [クイックスタート / Quick Start](#1-クイックスタート--quick-start)
-2. [前提条件 / Prerequisites](#2-前提条件--prerequisites)
-3. [インストール / Installation](#3-インストール--installation)
-4. [設定 / Configuration](#4-設定--configuration)
-5. [使い方ガイド / Usage Guide](#5-使い方ガイド--usage-guide)
-6. [自分のドキュメントで試す / Try With Your Own Documents](#6-自分のドキュメントで試す--try-with-your-own-documents)
-7. [マルチプロジェクト対応 / Multi-Project Isolation](#7-マルチプロジェクト対応--multi-project-isolation)
-8. [技術詳細 / Technical Details](#8-技術詳細--technical-details)
-9. [トラブルシューティング / Troubleshooting](#9-トラブルシューティング--troubleshooting)
-10. [開発者向け / Development](#10-開発者向け--development)
-
----
-
-## 1. クイックスタート / Quick Start
-
-**最速で動かすための3ステップ：**
+以下の 5 ステップでドキュメントアップロードから QA まで完了できます。
 
 ```bash
-# ① インストール（初回のみ）
-cd ~/projects/hermes_bedrock_agent
-uv sync
+# ① S3 にドキュメントをアップロード
+aws s3 sync ./設計書/ s3://s3-hulftchina-rd/サンプル20260529/
 
-# ② 設定（初回のみ）
-cp .env.example .env
-# .env を編集して AWS_REGION, S3_BUCKET, BEDROCK_VLM_MODEL_ID を設定
+# ② VLM で Excel/PDF を解析し Markdown に変換
+dualrag parse --s3-prefix "サンプル20260529/" \
+  --project-id "sample_20260529" \
+  --output-dir outputs/サンプル20260529
 
-# ③ 実行（S3上のドキュメントを解析→ナレッジベース構築→質問応答）
-soffice --headless --accept="socket,host=localhost,port=2002;urp;" --norestore &
+# ③ Markdown → ベクトル KB (LanceDB) を構築
+dualrag build-kb outputs/サンプル20260529/wb1/vlm_parsed/ \
+  --project-id "sample_20260529"
 
-dualrag parse --s3-prefix "あなたのフォルダ名/"
-dualrag build-kb outputs/あなたのフォルダ名/run_YYYYMMDD_HHMMSS/ワークブック名/vlm_parsed/ \
-  --project-id "あなたのフォルダ名" --use-llm-graph
-dualrag qa --project-id "あなたのフォルダ名"
+# ④ Markdown → グラフ DB (Neptune) を構築
+dualrag graph outputs/サンプル20260529 \
+  --project-id "sample_20260529"
+
+# ⑤ 質問応答ターミナルを起動
+dualrag qa --project-id "sample_20260529"
 ```
 
-> 💡 `project_id` は必ずS3ディレクトリ名と完全一致させてください。
-> 例: `s3://bucket/14_債務奉行クラウド/` → `--project-id "14_債務奉行クラウド"`
+> 💡 各コマンドの詳細は[パイプラインの実行](#6-パイプラインの実行)を参照してください。  
+> ⚠️ ステップ②で LibreOffice が必要です（[環境構築](#5-環境構築)参照）。
 
 ---
 
-## 2. 前提条件 / Prerequisites
+## 1. プロジェクト概要
 
-### 必要なソフトウェア / Required Software
+### DualRAG とは
 
-| ソフトウェア | 用途 | インストール方法 |
-|-------------|------|----------------|
+DualRAG は、日本企業の設計書（Excel ワークブック、PDF、フローチャート）を AI で解析し、**ベクトル検索 + グラフ検索**の 2 つの検索手法を組み合わせた質問応答ナレッジベースを構築するパイプラインです。
+
+### 対象ドキュメント
+
+| ドキュメント種別 | 具体例 |
+|----------------|--------|
+| Excel 設計書 | 業務プロセス図、マッピング定義書、API仕様書、IF定義書 |
+| PDF 仕様書 | アプリケーション概要書、開発仕様書 |
+| Mermaid ファイル (`.mmd`) | フローチャート ground-truth（存在する場合） |
+
+特に以下のような**複雑な Excel 設計書**の知識抽出に対応しています：
+
+- セル結合・色分け・矢印・図形で意味を伝えるレイアウト
+- 複数シートにまたがるシステム間連携マッピング
+- Excel 図形で描かれたフローチャート
+- テーブル間・フィールド間のデータ変換ルール
+- ステータス遷移、分岐条件、エラー処理ロジック
+
+### 使用する AWS サービスとテクノロジー
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  ① S3          ソースドキュメントの保管場所                                  │
+│  ② LibreOffice Excel → シート別 PDF 変換                                    │
+│  ③ Bedrock     Claude Sonnet (VLM) で画像を視覚的に理解 → Markdown 生成     │
+│  ④ Bedrock     Titan Embed V2 でテキスト → ベクトル変換                     │
+│  ⑤ LanceDB    ベクトル検索用ローカルデータベース                             │
+│  ⑥ Neptune    グラフ検索用グラフデータベース (openCypher)                     │
+│  ⑦ Bedrock     Claude Sonnet で最終回答生成（マルチモーダル）               │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### なぜ Dual-RAG か
+
+| RAG 方式 | 得意な質問タイプ | 質問例 |
+|---------|----------------|--------|
+| **Vector RAG** (テキスト類似度検索) | 「○○について教えて」型 | 「仕入伝票 API のデータ形式は？」 |
+| **Graph RAG** (グラフ関係検索) | 「A と B の関係は？」型 | 「SAP から ANDPAD へのデータフローは？」 |
+
+両方を組み合わせることで、テキスト類似度では見つからない構造的な関係も含めて質問に回答できます。
+
+### なぜ VLM（視覚解析）か
+
+日本企業の Excel 設計書は、セル結合・色分け・矢印・図形で意味を伝えます。通常のテキスト抽出ツール（openpyxl、pandas 等）ではレイアウトに含まれる視覚的知識を取得できません。
+
+DualRAG では各シートを画像化し、Claude Sonnet のマルチモーダル機能で**視覚的に理解**することで、従来手法では抽出不可能だった知識を Markdown として構造化します。
+
+---
+
+## 2. 全体ワークフロー
+
+```
+ ┌─────────┐     ┌─────────────┐     ┌────────────┐     ┌──────────┐     ┌──────────┐     ┌─────┐
+ │ S3 Upload│ ──→ │ dualrag parse│ ──→ │dualrag     │ ──→ │ dualrag  │ ──→ │ dualrag  │ ──→ │ QA  │
+ │(ドキュメント)│     │(Excel→VLM)  │     │build-kb    │     │ graph    │     │ qa       │     │回答 │
+ └─────────┘     └─────────────┘     │(ベクトルKB) │     │(グラフDB)│     └──────────┘     └─────┘
+                                       └────────────┘     └──────────┘
+```
+
+**ステップ詳細：**
+
+1. **S3 アップロード** — プロジェクト単位で Excel/PDF ファイルを S3 にアップロード
+2. **`dualrag parse`** — S3 からファイルを取得し、Excel → PDF → PNG → VLM → Markdown に変換
+3. **`dualrag build-kb`** — Markdown をチャンク分割して LanceDB（ベクトルDB）に格納
+4. **`dualrag graph`** — Markdown からエンティティ/関係を抽出し Neptune（グラフDB）にロード
+5. **`dualrag qa`** — 対話ターミナルで質問 → ベクトル検索 + グラフ検索 → マルチモーダル回答生成
+6. **エビデンス参照** — 回答の根拠を元の PDF/画像/Markdown まで遡って確認可能
+
+---
+
+## 3. S3 アップロードガイド
+
+### 推奨ディレクトリ構造
+
+```
+s3://your-bucket/
+├── プロジェクトA/                      # プロジェクト単位でディレクトリを分ける
+│   ├── 設計書_マッピング定義.xlsx
+│   ├── 仕様書_API概要.xlsx
+│   └── フローチャート.mmd            # 存在すればフローチャート ground-truth
+├── プロジェクトB/
+│   ├── IF定義書_受発注.xlsx
+│   └── 概要設計.pdf
+└── 14_債務奉行クラウド/
+    ├── 債務_APIデータ形式.xlsx
+    ├── FY2024_アプリケーション概要.xlsx
+    └── ...
+```
+
+**重要な原則：**
+
+- プロジェクトごとに**独立した S3 ディレクトリ**を使用する
+- 異なるプロジェクトのファイルを同じディレクトリに混在させない
+- S3 ディレクトリ名がそのままプロジェクト識別子の基盤となる
+
+### アップロード手順
+
+```bash
+# 単一ファイルのアップロード
+aws s3 cp /path/to/設計書.xlsx s3://your-bucket/プロジェクト名/
+
+# フォルダ全体を再帰的にアップロード
+aws s3 sync /path/to/local_docs/ s3://your-bucket/プロジェクト名/
+
+# アップロード確認
+aws s3 ls s3://your-bucket/プロジェクト名/
+```
+
+**実例：**
+
+```bash
+# プロジェクトのアップロード
+aws s3 sync ./設計書/ s3://s3-hulftchina-rd/サンプル20260529/
+
+# アップロード確認
+aws s3 ls s3://s3-hulftchina-rd/サンプル20260529/
+# 2026-05-29 10:00:00     524288 MW_IFマッピング定義書_205_発注情報.xlsx
+# 2026-05-29 10:00:01      45056 M社様_DSSスクリプト改修概要_フローチャート.xlsx
+```
+
+### Mermaid ファイル (.mmd) について
+
+プロジェクト内に `.mmd` ファイルが存在する場合、それはフローチャートの **ground-truth**（正解データ）として扱われます。
+
+- VLM がフローチャートを画像から推定するよりも、`.mmd` ファイルの内容を優先する
+- `.mmd` は parse ステージでテキストとしてそのまま読み込まれ、Markdown に含まれる
+- 他のシートから推定されたフローとの整合性確認にも利用される
+
+---
+
+## 4. Project ID と Project Name
+
+### 概要
+
+DualRAG はマルチプロジェクト対応で、複数プロジェクトのデータを同じ LanceDB / Neptune に格納しながら完全に分離できます。そのため、各プロジェクトに一貫した識別子を付与する必要があります。
+
+| 用語 | 説明 | 使用箇所 |
+|------|------|----------|
+| `project_id` | 安定した ASCII 識別子 | CLI の `--project-id` 引数、LanceDB フィルタ、Neptune プロパティ |
+| `project_name` | 表示用の日本語名 | Neptune の表示ラベル、レポート |
+
+### 推奨命名規則
+
+| 項目 | 推奨フォーマット | 例 |
+|------|-----------------|-----|
+| `project_id` | ASCII、`_` 区切り | `sample_20260529`, `saimu_bugyo_cloud` |
+| `project_name` | 日本語、そのまま | `サンプル20260529`, `14_債務奉行クラウド` |
+
+**重要:**  project_id を全コマンドで統一してください。
+
+```bash
+# ✅ 正しい: 全コマンドで同じ project_id を使用
+dualrag parse --s3-prefix "サンプル20260529/" --project-id "sample_20260529"
+dualrag build-kb outputs/サンプル20260529/wb1/vlm_parsed/ --project-id "sample_20260529"
+dualrag graph outputs/サンプル20260529 --project-id "sample_20260529"
+dualrag qa --project-id "sample_20260529"
+
+# ❌ 間違い: コマンドごとに project_id が異なる
+dualrag build-kb ... --project-id "サンプル20260529"   # ← 日本語
+dualrag qa --project-id "sample_20260529"              # ← ASCII
+# → build-kb のデータが qa で見つからない！
+```
+
+### なぜ一貫性が重要か
+
+- **LanceDB**: `project_id` カラムで事前フィルタリング → 不一致だとチャンクが取得できない
+- **Neptune**: `project_id` プロパティでノードを絞り込み → 不一致だとグラフが空に見える
+- **QA**: ベクトル検索・グラフ検索の両方が project_id を使用 → 0件ヒットの主要原因
+
+---
+
+## 5. 環境構築
+
+### 必要なソフトウェア
+
+| ソフトウェア | 用途 | インストール |
+|-------------|------|-------------|
 | **Python 3.11+** | 実行環境 | `sudo apt install python3.11` |
-| **uv** | パッケージマネージャー | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| **AWS CLI** | AWS認証 | `sudo apt install awscli` |
-| **LibreOffice** | Excel→PDF変換 | `sudo apt install libreoffice` |
-| **poppler-utils** | PDF→PNG変換 | `sudo apt install poppler-utils` |
+| **uv** | パッケージ管理 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| **AWS CLI** | AWS 認証・S3 操作 | `sudo apt install awscli` |
+| **LibreOffice** | Excel → PDF 変換 | `sudo apt install libreoffice` |
+| **poppler-utils** | PDF → PNG 変換 | `sudo apt install poppler-utils` |
 
-### 必要なAWSリソース / Required AWS Resources
+### 必要な AWS リソース
 
-| リソース | 用途 | 必須？ |
-|---------|------|--------|
-| **AWSクレデンシャル** | 全AWSサービスの認証 | ✅ 必須 |
-| **Amazon Bedrock (Claude Sonnet)** | AI視覚解析+回答生成 | ✅ 必須 |
-| **Amazon Bedrock (Titan Embed V2)** | テキスト埋め込み（検索用） | ✅ 必須 |
-| **S3バケット** | ソースドキュメント保存先 | ✅ 必須 |
-| **Neptune Analytics** | グラフデータベース | ⚠️ オプション（なくてもQA動作可） |
+| リソース | 用途 | 必須/オプション |
+|---------|------|----------------|
+| **AWS クレデンシャル** | 全 AWS サービスの認証 | ✅ 必須 |
+| **Amazon Bedrock (Claude Sonnet)** | VLM 視覚解析 + 回答生成 | ✅ 必須 |
+| **Amazon Bedrock (Titan Embed V2)** | テキスト埋め込み（1024次元） | ✅ 必須 |
+| **S3 バケット** | ソースドキュメント保管 | ✅ 必須 |
+| **Neptune Analytics** | グラフデータベース | ⚠️ オプション |
 
-### 前提条件の確認 / Verify Prerequisites
+> 💡 Neptune なしでも QA は動作します（ベクトル検索のみ）。`--no-graph` オプションで明示的にスキップ可能。
 
-```bash
-# Python バージョン確認（3.11以上が必要）
-python3 --version
-
-# uv の確認
-uv --version
-
-# AWS認証の確認
-aws sts get-caller-identity
-
-# LibreOffice の確認
-soffice --version
-
-# poppler (pdftoppm) の確認
-pdftoppm -v
-```
-
----
-
-## 3. インストール / Installation
+### インストール手順
 
 ```bash
-# ステップ1: プロジェクトディレクトリに移動
+# ① プロジェクトディレクトリに移動
 cd ~/projects/hermes_bedrock_agent
 
-# ステップ2: 依存関係をインストール（.venv/ が自動作成されます）
+# ② 依存関係をインストール（.venv/ が自動作成される）
 uv sync
 
-# ステップ3: 動作確認
-uv run dualrag --help
+# ③ CLI 動作確認
+dualrag --help
 ```
 
-以下の3つのコマンドが表示されれば成功です：
+以下の 4 コマンドが表示されれば成功です：
 
 ```
 Commands:
   parse     Stage 1: Parse Excel/PDF files from local disk or S3 → VLM markdown.
   build-kb  Stage 2: Parsed markdown → LanceDB vector store + Neptune graph.
   qa        Stage 3: Interactive QA terminal or one-shot query.
+  graph     Extract graph from vlm_parsed/ markdown and load into Neptune.
 ```
 
----
-
-## 4. 設定 / Configuration
-
-### `.env` ファイルの作成 / Create `.env` File
+### `.env` 設定
 
 ```bash
 cp .env.example .env
 ```
 
-### `.env` の編集 / Edit `.env`
+以下の設定項目を環境に合わせて編集してください：
 
 ```bash
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 必須設定（これがないとパイプラインが動きません）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━ 必須設定 ━━━━
 
-# AWSリージョン
+# AWS リージョン
 AWS_REGION=ap-northeast-1
 
-# S3バケット名（ドキュメント格納先）
+# S3 バケット名
 S3_BUCKET=your-bucket-name
 
-# Bedrock VLMモデルID（視覚解析+回答生成）
-# 重要: ap-northeast-1 では推論プロファイルプレフィックスが必須！
+# VLM モデル ID (視覚解析 + QA 回答生成)
+# 重要: ap-northeast-1 では推論プロファイルプレフィックスが必須
 # ✅ 正しい: jp.anthropic.claude-sonnet-4-6
-# ❌ 間違い: anthropic.claude-sonnet-4-20250514-v1:0（ValidationExceptionになる）
-BEDROCK_VLM_MODEL_ID=jp.anthropic.claude-sonnet-4-6
+# ❌ 間違い: anthropic.claude-sonnet-4-20250514-v1:0 (ValidationException になる)
+VISION_LLM_MODEL_ID=jp.anthropic.claude-sonnet-4-6
+TEXT_LLM_MODEL_ID=jp.anthropic.claude-sonnet-4-6
 
-# Bedrock 埋め込みモデルID（テキスト→ベクトル変換）
-BEDROCK_EMBED_MODEL_ID=amazon.titan-embed-text-v2:0
+# 埋め込みモデル ID
+EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 
-# ベクトルDBの保存先
+# ベクトルDB ローカル保存先
 VECTOR_LOCAL_STORE_PATH=/home/ubuntu/projects/data/vector_store/lancedb
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# オプション設定（なくても動作するが機能が制限される）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━ オプション設定 ━━━━
 
-# Neptune Analyticsグラフデータベース ID（形式: g-xxxxxxxxxx）
-# 未設定の場合、QA回答にグラフコンテキストが含まれません
+# Neptune Analytics グラフ ID (g-xxxxxxxxxx 形式)
+# 未設定の場合、QA でグラフコンテキストが使われない
 NEPTUNE_GRAPH_ID=g-xxxxxxxxxx
 ```
 
-### LibreOffice の起動 / Start LibreOffice
+**ap-northeast-1 でのモデル ID プレフィックスについて：**
 
-Excel→PDF変換にはLibreOfficeがバックグラウンドで動作している必要があります：
+東京リージョンでは Bedrock のモデル ID に**推論プロファイルプレフィックス**が必要です：
+
+| プレフィックス | スコープ | 例 |
+|---------------|---------|-----|
+| `jp.anthropic.*` | 日本 | `jp.anthropic.claude-sonnet-4-6` |
+| `apac.anthropic.*` | アジア太平洋 | `apac.anthropic.claude-sonnet-4-6` |
+| `global.anthropic.*` | グローバル | `global.anthropic.claude-sonnet-4-6` |
+
+利用可能なプロファイルの確認：
 
 ```bash
-# ヘッドレスモードで起動（ポート2002でリスン）
+aws bedrock list-inference-profiles --region ap-northeast-1 \
+  --query "InferenceProfileSummaries[].InferenceProfileId"
+```
+
+### LibreOffice の起動
+
+Excel → PDF 変換には LibreOffice がバックグラウンドで動作している必要があります：
+
+```bash
+# ヘッドレスモードで起動（ポート 2002）
 soffice --headless --accept="socket,host=localhost,port=2002;urp;" --norestore &
 
-# 起動確認
+# 起動確認（3秒待ち）
+sleep 3
 lsof -i :2002
-# ポート2002でプロセスが表示されればOK
 ```
 
-> ⚠️ LibreOfficeは `dualrag parse` コマンド実行時のみ必要です。
-> `dualrag build-kb` や `dualrag qa` には不要です。
+> ⚠️ LibreOffice は `dualrag parse` 実行時のみ必要です。  
+> `dualrag build-kb`、`dualrag graph`、`dualrag qa` には不要です。
 
 ---
 
-## 5. 使い方ガイド / Usage Guide
+## 6. パイプラインの実行
 
-DualRAGは3つのステージで動作します：
+### 6.1 ステージ 1: ドキュメント解析 (`dualrag parse`)
 
-| コマンド | ステージ | 処理内容 |
-|---------|---------|---------|
-| `dualrag parse` | 1. 解析 | Excel/PDFファイルをダウンロード→画像化→AI解析→Markdown生成 |
-| `dualrag build-kb` | 2. KB構築 | Markdownをチャンク化→ベクトルDB+グラフDBに格納 |
-| `dualrag qa` | 3. 質問応答 | 対話式ターミナルで質問→Dual-RAG検索→マルチモーダル回答生成 |
+S3 から Excel/PDF ファイルをダウンロードし、VLM で解析して Markdown に変換します。
 
----
-
-### 5.1 ステージ1: ドキュメント解析 (`dualrag parse`)
-
-S3からExcel/PDFファイルをダウンロードし、AI視覚解析でMarkdownに変換します。
-
-**S3プレフィックスからの解析（最も一般的）：**
+**基本コマンド：**
 
 ```bash
-dualrag parse --s3-prefix "14_債務奉行クラウド/"
+dualrag parse --s3-prefix "プロジェクトフォルダ名/"
 ```
 
-**ローカルファイルの解析：**
-
-```bash
-dualrag parse --file /path/to/document.xlsx
-```
-
-**project-idと出力先を指定：**
+**全オプション指定：**
 
 ```bash
 dualrag parse \
-  --s3-prefix "14_債務奉行クラウド/" \
-  --project-id "14_債務奉行クラウド" \
-  --output-dir outputs/14_債務奉行クラウド
+  --s3-prefix "サンプル20260529/" \
+  --project-id "sample_20260529" \
+  --output-dir outputs/サンプル20260529
 ```
 
-> 💡 `--project-id` を省略すると、S3プレフィックスから自動導出されます。
-
-**解析処理の流れ：**
-
-```
-1. S3 Discovery: プレフィックス配下の .xlsx / .pdf ファイルを検出
-2. Download:     outputs/<run>/downloads/ にダウンロード
-3. Excel → PDF:  LibreOffice で各シートを個別PDFに変換
-4. PDF → PNG:    pdftoppm でPNG画像にレンダリング
-   - 小さいシート → 1枚の画像
-   - 大きいシート → 3000pxタイルに分割（300pxオーバーラップ）
-5. VLM Parse:    Claude Sonnet が各画像を「見て」Markdownを生成
-   - シートタイプ自動検出（マッピング表/フローチャート/仕様書 等）
-   - タイプ別の専用プロンプト使用
-6. Post-process: Markdown整形
-```
-
-**⚠️ 所要時間の目安 / Timing Notes:**
-
-| 対象 | 所要時間 |
-|------|---------|
-| 1シートあたりVLM解析 | 40〜120秒 |
-| 27シートのワークブック | 30〜60分 |
-| 14ファイル・43シート | 約2時間 |
-
-> 🚫 VLM解析を並列実行しないでください。タイムアウトカスケードが発生します。
-
-**出力構造 / Output Structure:**
-
-```
-outputs/14_債務奉行クラウド/run_20260526_074405/
-├── downloads/                                # ダウンロードしたExcelファイル
-├── 債務_APIデータ形式/                        # ワークブック1
-│   ├── pdf/                                  #   sheet_01.pdf, sheet_02.pdf, ...
-│   ├── images/                               #   sheet_01/full.png, ...
-│   ├── vlm_parsed/                           #   sheet_01.md, sheet_02.md, ...
-│   └── sheet_name_mapping.csv                #   シート番号 → 実際のシート名
-├── FY2024_アプリケーション概要_債務奉行クラウド/  # ワークブック2
-│   ├── pdf/
-│   ├── images/
-│   └── vlm_parsed/
-└── parse_summary.json                        # 解析サマリー
-```
-
----
-
-### 5.2 ステージ2: ナレッジベース構築 (`dualrag build-kb`)
-
-解析済みMarkdownをチャンク分割し、ベクトルDBとグラフDBに格納します。
-
-**基本的な使い方：**
+**ローカルファイルの直接解析：**
 
 ```bash
-dualrag build-kb \
-  outputs/14_債務奉行クラウド/run_20260526_074405/債務_APIデータ形式/vlm_parsed/ \
-  --project-id "14_債務奉行クラウド"
+dualrag parse --file /path/to/設計書.xlsx --output-dir outputs/local_test
 ```
 
-**LLMグラフ抽出付き（高品質、推奨）：**
-
-```bash
-dualrag build-kb \
-  outputs/14_債務奉行クラウド/run_20260526_074405/債務_APIデータ形式/vlm_parsed/ \
-  --workbook "債務_APIデータ形式" \
-  --project-id "14_債務奉行クラウド" \
-  --use-llm-graph \
-  --graph-delay 3.0
-```
-
-**オプション一覧 / Options:**
+**主なオプション：**
 
 | オプション | 説明 | デフォルト |
 |-----------|------|-----------|
-| `--workbook` / `-w` | ワークブック名（メタデータ用） | ディレクトリ名 |
-| `--project-id` | プロジェクトID（**必ず指定**） | 空（警告表示） |
-| `--skip-vector` | LanceDBへの格納をスキップ | False |
-| `--skip-graph` | Neptuneグラフをスキップ | False |
-| `--use-llm-graph` | Claude Sonnetでグラフ抽出（高品質） | False（キーワード抽出） |
-| `--graph-delay` | LLM呼び出し間の待機時間（秒） | 3.0 |
-| `--dry-run-graph` | グラフ抽出のみ実行（Neptuneに書き込まない） | False |
+| `--s3-prefix` | S3 上のプレフィックス（ディレクトリパス） | なし |
+| `--file`, `-f` | ローカルファイルパス | なし |
+| `--output-dir`, `-o` | 出力先ディレクトリ | `outputs/` |
+| `--project-id` | プロジェクト ID | S3 プレフィックスから自動導出 |
+| `--stages` | 実行ステージ: `all\|parse\|ingest\|images\|vlm` | `all` |
+| `--mode` | LanceDB 書込モード: `append\|replace\|rebuild` | `append` |
+| `--skip-graph` | Neptune グラフをスキップ | なし |
 
-**グラフ抽出モード / Graph Extraction Modes:**
+**処理の流れ：**
 
-| モード | 方法 | 品質 | コスト | 用途 |
-|--------|------|------|--------|------|
-| **Keyword** (デフォルト) | パターンマッチング | 基本 | 無料 | 素早いテスト |
-| **LLM** (`--use-llm-graph`) | Claude Sonnetで抽出 | 高い | トークン消費 | 本番構築 |
+```
+① S3 Discovery    → プレフィックス配下の .xlsx / .pdf 検出
+② Download        → ローカルにダウンロード
+③ Excel → PDF     → LibreOffice で各シートを個別 PDF に変換
+④ PDF → PNG       → pdftoppm で PNG にレンダリング
+                     - 小さいシート: 1 枚の画像
+                     - 大きいシート: 3000px タイルに分割（300px オーバーラップ）
+⑤ VLM Parse       → Claude Sonnet が各画像を「見て」Markdown 生成
+                     - シートタイプ自動検出（マッピング/フローチャート/仕様書 等）
+                     - タイプ別の専用プロンプト使用
+⑥ 出力            → vlm_parsed/ に sheet_NN.md ファイルを生成
+```
 
-**構築結果の確認 / Verify Build:**
+**所要時間の目安：**
+
+| 対象 | 所要時間 |
+|------|---------|
+| 1 シート | 40〜120 秒 |
+| 27 シートのワークブック | 30〜60 分 |
+| 2 ワークブック・29 シート | 約 90 分 |
+
+> ⚠️ VLM 解析を並列実行しないでください。タイムアウトカスケードが発生します。
+
+---
+
+### 6.2 ステージ 2: ベクトル KB 構築 (`dualrag build-kb`)
+
+VLM 解析済み Markdown をチャンク分割し、**LanceDB（ベクトルDB）** に格納します。  
+このステップはベクトル検索の基盤を構築します。
+
+**基本コマンド：**
 
 ```bash
-# LanceDB の行数確認:
-uv run python -c "
-import lancedb
-db = lancedb.connect('/home/ubuntu/projects/data/vector_store/lancedb')
-tbl = db.open_table('murata_excel_vlm_dual_rag')
-print(f'Total rows: {tbl.count_rows()}')
-"
+dualrag build-kb \
+  outputs/サンプル20260529/wb1/vlm_parsed/ \
+  --project-id "sample_20260529"
+```
+
+**ワークブック名を指定（推奨）：**
+
+```bash
+dualrag build-kb \
+  outputs/サンプル20260529/wb2_mapping/vlm_parsed/ \
+  --workbook "MW_IFマッピング定義書_205_発注情報" \
+  --project-id "sample_20260529"
+```
+
+**主なオプション：**
+
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| `PARSED_DIR` (引数) | `vlm_parsed/` ディレクトリパス（必須） | — |
+| `--workbook`, `-w` | ワークブック名（メタデータ用） | ディレクトリ名 |
+| `--project-id` | プロジェクト ID（**必ず指定**） | 空（警告表示） |
+| `--skip-vector` | LanceDB 格納をスキップ | False |
+| `--skip-graph` | Neptune グラフをスキップ | False |
+| `--use-llm-graph` | Claude Sonnet でグラフ抽出（高品質） | False |
+| `--dry-run-graph` | グラフ抽出のみ、Neptune に書き込まない | False |
+| `--graph-delay` | LLM 呼び出し間隔（秒） | 3.0 |
+
+**複数ワークブックがある場合：**
+
+ワークブックごとに `build-kb` を実行してください。同じ `project_id` を指定すれば、LanceDB に追記されます：
+
+```bash
+# ワークブック 1
+dualrag build-kb outputs/サンプル20260529/wb1_flowchart/vlm_parsed/ \
+  --workbook "フローチャート設計書" \
+  --project-id "sample_20260529"
+
+# ワークブック 2（同じ project_id で追記）
+dualrag build-kb outputs/サンプル20260529/wb2_mapping/vlm_parsed/ \
+  --workbook "マッピング定義書" \
+  --project-id "sample_20260529"
 ```
 
 ---
 
-### 5.3 ステージ3: 質問応答 (`dualrag qa`)
+### 6.3 ステージ 3: グラフ DB 構築 (`dualrag graph`)
 
-構築したナレッジベースに対して質問応答を行います。
+プロジェクト全体の VLM 解析結果から、エンティティ（システム、API、テーブル、フィールド等）と関係性を抽出し、**Neptune（グラフDB）** にロードします。  
+このステップはグラフ検索の基盤を構築します。
+
+> 📌 **推奨パイプライン**: `dualrag build-kb`（ベクトル KB）→ `dualrag graph`（グラフ DB）の順で実行してください。  
+> `build-kb` にも `--use-llm-graph` オプションがありますが、`dualrag graph` はプロジェクト全体を横断的に分析するため、より高品質なグラフが得られます。通常は `dualrag graph` のみでグラフ構築してください。
+
+**基本コマンド：**
+
+```bash
+dualrag graph outputs/サンプル20260529 --project-id sample_20260529
+```
+
+**Dry-run（Neptune に書き込まず出力ファイルのみ生成）：**
+
+```bash
+dualrag graph outputs/サンプル20260529 \
+  --project-id sample_20260529 \
+  --project-name サンプル20260529 \
+  --dry-run
+```
+
+**主なオプション：**
+
+| オプション | 説明 | デフォルト |
+|-----------|------|-----------|
+| `PROJECT_DIR` (引数) | `vlm_parsed/` を含むプロジェクトディレクトリ（必須） | — |
+| `--project-id`, `-p` | プロジェクト ID (ASCII) | — |
+| `--project-name`, `-n` | 表示用プロジェクト名（日本語可） | — |
+| `--dry-run` | Neptune に書き込まず出力のみ | False |
+| `--skip-load` | Neptune ロードをスキップ | False |
+| `--output-dir`, `-o` | 出力先 | `<project_dir>/graph_output/` |
+| `--neptune-graph-id` | Neptune グラフ ID（.env を上書き） | .env の値 |
+| `--delay` | LLM 呼出間隔（秒） | 3.0 |
+
+**出力されるファイル：**
+
+```
+graph_output/
+├── semantic_map_00_markdown_inventory.json     # 入力ファイル一覧
+├── semantic_map_01_evidence_units.jsonl         # エビデンスユニット
+├── semantic_map_02_id_registry.json            # ノード ID レジストリ
+├── semantic_map_03_semantic_nodes.jsonl         # 意味ノード
+├── semantic_map_04_semantic_edges.jsonl         # 意味エッジ
+├── semantic_map_05_evidence_nodes.jsonl         # エビデンスノード
+├── semantic_map_06_evidence_edges.jsonl         # エビデンスエッジ
+├── semantic_map_11_candidate_links.jsonl        # 候補リンク（未検証）
+├── semantic_map_13_review_tasks.jsonl           # 手動レビュー項目
+├── semantic_map_14_full_graph.json              # 完全グラフ統計
+├── semantic_map_15_display_graph.json           # 表示グラフ統計
+├── semantic_map_nodes_full.jsonl                # 最終ノード全件
+├── semantic_map_edges_full.jsonl                # 最終エッジ全件
+├── semantic_map_nodes_display.jsonl             # 表示用ノード
+├── semantic_map_edges_display.jsonl             # 表示用エッジ
+├── semantic_map_import_full.cypher              # Neptune ロード用 Cypher（全件）
+├── semantic_map_import_display.cypher           # Neptune ロード用 Cypher（表示）
+├── semantic_map_preflight_check.md             # 品質チェックレポート
+├── semantic_map_graph_explore_queries.cypher    # 検証用クエリ集
+└── semantic_map_extraction_report.md           # 抽出レポート
+```
+
+---
+
+### 6.4 ステージ 4: 質問応答 (`dualrag qa`)
+
+構築したナレッジベースに対して質問応答を実行します。
 
 **対話モード（推奨）：**
 
 ```bash
-dualrag qa --project-id "14_債務奉行クラウド"
+dualrag qa --project-id "sample_20260529"
 ```
 
-**ワンショットクエリ（1つ質問して終了）：**
+**ワンショットクエリ：**
 
 ```bash
-dualrag qa --project-id "14_債務奉行クラウド" \
-  "仕入伝票APIのデータ形式を教えてください"
+dualrag qa --project-id "sample_20260529" \
+  "発注情報のフィールドマッピングを教えてください"
 ```
 
-**オプション：**
+**グラフなしモード（Neptune 未設定時）：**
+
+```bash
+dualrag qa --project-id "sample_20260529" --no-graph
+```
+
+**主なオプション：**
 
 | オプション | 説明 | デフォルト |
 |-----------|------|-----------|
-| `--project-id` | 対象プロジェクト | 空（全プロジェクト横断） |
-| `--mode` / `-m` | `answer`(全機能) / `retrieve`(検索のみ) / `graph`(グラフのみ) | `answer` |
-| `--top-k` / `-k` | 取得チャンク数 (1-20) | 5 |
+| `[QUERY]` (引数) | ワンショットクエリ（省略で対話モード） | なし |
+| `--project-id` | 対象プロジェクト ID | 空（全プロジェクト横断） |
+| `--mode`, `-m` | `answer` / `retrieve` / `graph` | `answer` |
+| `--top-k`, `-k` | 取得チャンク数 (1–20) | 5 |
 | `--no-graph` | グラフコンテキストをスキップ | False |
 | `--catalog-dir` | シート閲覧用ディレクトリ | なし |
 
-**対話ターミナル内のスラッシュコマンド / Interactive Commands:**
+---
+
+## 7. ローカル出力構造
+
+### `dualrag parse` の出力
+
+```
+outputs/サンプル20260529/
+├── 01_基本設計/                          # S3 と同じフォルダ構造
+│   └── (ソース Excel ファイル)
+├── 02_詳細設計/
+│   └── (ソース Excel ファイル)
+├── wb1_flowchart/                        # ワークブック 1 の処理結果
+│   ├── pdf/                             #   シート別 PDF ファイル
+│   │   ├── sheet_01.pdf
+│   │   └── sheet_02.pdf
+│   ├── images/                          #   レンダリング済み PNG 画像
+│   │   ├── sheet_01/
+│   │   │   └── full.png               #   フルサイズ画像
+│   │   └── sheet_02/
+│   │       ├── full.png
+│   │       └── tiles/                  #   大きいシートはタイル分割
+│   │           ├── tile_0_0.png
+│   │           └── tile_0_1.png
+│   ├── vlm_parsed/                      #   VLM 解析結果（Markdown）
+│   │   ├── sheet_01.md
+│   │   ├── sheet_01_meta.json          #   メタデータ（タイプ、信頼度等）
+│   │   └── sheet_02.md
+│   ├── dual_rag/                        #   チャンク JSONL（build-kb 後に生成）
+│   │   └── chunks.jsonl
+│   └── sheet_name_mapping.csv           #   シート番号 → 実際のシート名
+├── wb2_mapping/                          # ワークブック 2 の処理結果
+│   ├── pdf/
+│   ├── images/
+│   ├── vlm_parsed/
+│   ├── dual_rag/
+│   └── sheet_name_mapping.csv
+├── graph_output/                         # グラフ抽出結果（graph コマンド後に生成）
+│   ├── semantic_map_*.jsonl
+│   ├── semantic_map_*.cypher
+│   └── semantic_map_*.md
+├── pipeline.log                          # パイプライン実行ログ
+└── pipeline_report_*.json                # パイプラインレポート（メトリクス）
+```
+
+### 各ディレクトリの役割
+
+| ディレクトリ | 用途 |
+|-------------|------|
+| `pdf/` | LibreOffice で変換した各シートの PDF。エビデンス画像の元データ |
+| `images/` | PDF からレンダリングした PNG。VLM に入力する画像 |
+| `vlm_parsed/` | **最重要**: VLM の解析結果 Markdown。後続の全ステージがここを参照 |
+| `dual_rag/` | チャンク分割済み JSONL。LanceDB に格納される中間データ |
+| `graph_output/` | グラフ抽出の全成果物。Neptune ロード用 Cypher も含む |
+
+### `sheet_name_mapping.csv` の形式
+
+```csv
+sheet_index,original_sheet_name,safe_pdf_filename
+1,変更履歴,sheet_01
+2,API呼出順序,sheet_02
+3,DataSpider開発仕様,sheet_03
+```
+
+このファイルにより、`sheet_01.md` → 実際のシート名「変更履歴」の対応が追跡できます。
+
+---
+
+## 8. QA 対話ターミナル
+
+### 起動方法
+
+```bash
+# 対話モード（推奨）
+dualrag qa --project-id "sample_20260529"
+
+# 検索のみモード（回答生成なし、チャンク確認用）
+dualrag qa --project-id "sample_20260529" --mode retrieve
+
+# グラフのみモード（Neptune グラフのみ参照）
+dualrag qa --project-id "sample_20260529" --mode graph
+```
+
+### スラッシュコマンド
+
+対話モード内で以下のコマンドが使用できます：
 
 | コマンド | 機能 |
 |---------|------|
-| `/mode retrieve` | 検索のみモード（チャンクを表示、回答生成なし） |
-| `/mode answer` | 完全回答モード（デフォルト） |
-| `/mode graph` | グラフのみモード |
-| `/topk 10` | 取得チャンク数を変更 |
+| `/mode [retrieve\|answer\|graph]` | クエリモード切り替え |
+| `/topk N` | 取得チャンク数を変更 (1–20) |
 | `/verbose` | チャンク全文表示の切り替え |
-| `/evidence` | PDF/PNG証拠画像の読み込み切り替え |
+| `/evidence` | PDF/PNG 証拠画像読み込みの切り替え |
+| `/history` | 最近のクエリ履歴を表示 |
+| `/last` | 最後のクエリを再実行 |
+| `/stats` | セッション統計を表示 |
 | `/sheets` | 利用可能なシート一覧 |
-| `/sheet 6` | シート6の内容表示 |
+| `/sheet N` | シート N の内容表示 |
+| `/clear` | 画面クリア |
 | `/help` | 全コマンド表示 |
-| `/quit` | 終了 |
+| `/quit` or `/exit` | 終了 |
 
-**QAの仕組み（Evidence Flow）：**
+### QA モードの説明
+
+| モード | 動作 | 用途 |
+|--------|------|------|
+| `answer` | ベクトル検索 + グラフ検索 + マルチモーダル回答生成 | 通常利用 |
+| `retrieve` | ベクトル検索のみ、チャンク表示 | 検索品質の確認 |
+| `graph` | グラフ検索のみ、関連ノード/エッジ表示 | グラフデータの確認 |
+
+### Vector RAG と Graph RAG の役割
+
+**Vector RAG（ベクトル検索）** は、質問に対して最も類似度の高いドキュメントチャンクを取得します。これが回答の**主要な根拠**です。
+
+- 元の Markdown テキストから直接抽出されたチャンク
+- テキスト類似度に基づくため、具体的なキーワードを含む質問に強い
+- 各チャンクはソース PDF / 画像まで追跡可能
+
+**Graph RAG（グラフ検索）** は、質問に関連するエンティティ（システム、API、テーブル等）の**構造的な関係情報**を補完コンテキストとして提供します。
+
+- システム間連携、テーブル間マッピング、API 呼出関係など
+- ベクトル検索では見つからない横断的な関係を補完
+- 回答に構造的な文脈を追加するための参考情報
+
+**重要:** グラフ検索の結果が質問と無関係な場合や、ノイズが多い場合には、システムはベクトル検索で取得したチャンクと元のエビデンス（PDF/画像）を主な根拠として回答を生成します。グラフコンテキストは補足情報であり、回答品質を下げる可能性がある場合は無視されます。
+
+### 質問例
 
 ```
-質問: 「仕入伝票APIのフィールドマッピングは？」
+「発注情報のフィールドマッピングを教えてください」
+「SAP から ANDPAD へのデータフローを説明して」
+「リリース前：納品データに対して編集・請負済みキャンセルを行う」
+「API呼出順序を教えてください」
+「この伝票の必須項目は何ですか？」
+「変換ルールの条件分岐を教えて」
+「エラー処理のフローを説明してください」
+「DataSpider の開発仕様は？」
+```
+
+### QA の処理フロー
+
+```
+質問入力
   │
-  ├── ① LanceDB検索 → 関連Markdownチャンク（テキスト証拠）
-  ├── ② Neptune検索 → 関連グラフコンテキスト
+  ├── ① LanceDB ベクトル検索 → 類似度の高い Markdown チャンク（テキスト証拠）
+  ├── ② Neptune グラフ検索 → 関連ノード・エッジ（構造的コンテキスト）
   │     ├─ Business Semantic Graph（システム、API、データフロー）
   │     └─ Implementation Graph（テーブル、フィールド、マッピングルール）
-  ├── ③ PDF/PNG画像ロード（視覚的証拠）
+  ├── ③ 証拠 PDF/PNG 画像ロード（マルチモーダル入力）
   │
   ▼
-  全証拠をまとめてClaude Sonnetに送信（マルチモーダル）
+  全証拠をまとめて Claude Sonnet に送信
   │
   ▼
   根拠付きの回答生成（具体的なシート番号を引用）
@@ -429,475 +724,303 @@ dualrag qa --project-id "14_債務奉行クラウド" \
 
 ---
 
-## 6. 自分のドキュメントで試す / Try With Your Own Documents
+## 9. エビデンストレーシング
 
-### 手順概要 / Step-by-Step Guide
+### エビデンストレーシングとは
 
-自分のExcel設計書でDualRAGを試すには、以下の手順に従ってください：
-
-#### ステップ1: S3にドキュメントをアップロード
-
-```bash
-# S3バケットにフォルダを作成してExcelファイルをアップロード
-aws s3 cp /path/to/your/設計書.xlsx s3://your-bucket/あなたのプロジェクト名/
-aws s3 cp /path/to/your/仕様書.xlsx s3://your-bucket/あなたのプロジェクト名/
-
-# アップロード確認
-aws s3 ls s3://your-bucket/あなたのプロジェクト名/
-```
-
-#### ステップ2: LibreOfficeを起動
-
-```bash
-soffice --headless --accept="socket,host=localhost,port=2002;urp;" --norestore &
-sleep 3  # 起動待ち
-lsof -i :2002  # 確認
-```
-
-#### ステップ3: ドキュメント解析
-
-```bash
-dualrag parse \
-  --s3-prefix "あなたのプロジェクト名/" \
-  --project-id "あなたのプロジェクト名" \
-  --output-dir outputs/あなたのプロジェクト名
-```
-
-> ⏱️ 所要時間: 1シートあたり約1〜2分。10シートなら10〜20分程度。
-
-#### ステップ4: ナレッジベース構築
-
-```bash
-# 解析結果ディレクトリを確認
-ls outputs/あなたのプロジェクト名/run_*/
-
-# vlm_parsed/ ディレクトリを指定してKB構築
-dualrag build-kb \
-  outputs/あなたのプロジェクト名/run_YYYYMMDD_HHMMSS/ワークブック名/vlm_parsed/ \
-  --workbook "ワークブック名" \
-  --project-id "あなたのプロジェクト名" \
-  --use-llm-graph
-```
-
-#### ステップ5: 質問応答
-
-```bash
-dualrag qa --project-id "あなたのプロジェクト名"
-```
-
-### 実例 / Real Example
-
-以下は実際のプロジェクト `14_債務奉行クラウド` の実行例です：
-
-```bash
-# 解析（14ファイル、43シート）
-dualrag parse --s3-prefix "14_債務奉行クラウド/"
-
-# KB構築（主要ワークブック）
-dualrag build-kb \
-  outputs/14_債務奉行クラウド/run_20260526_074405/債務_APIデータ形式/vlm_parsed/ \
-  --workbook "債務_APIデータ形式" \
-  --project-id "14_債務奉行クラウド" \
-  --use-llm-graph
-
-# 質問応答
-dualrag qa --project-id "14_債務奉行クラウド" \
-  "HULFT Squareの債務奉行クラウド連携スクリプトの構成を説明してください"
-```
-
-**回答例 / Example Answer:**
+DualRAG の回答は、元のソースドキュメントまで遡って確認できます。これを**エビデンストレーシング**と呼びます。
 
 ```
-# HULFT Square 債務奉行クラウド連携スクリプト構成
-
-## スクリプト構成図
-[HULFT Square]
-      ├─→ 債務奉行_import_buy_slip       （買入伝票インポート）
-      ├─← 債務奉行_import_buy_slip_result（結果取得）
-      └─→ 債務奉行_import_debt_slip      （債務伝票エクスポート）
-
-## 各スクリプトの詳細
-| スクリプト名 | 接続API | 入力 | 出力 |
-|...|...|...|...|
-
-[Evidence: sheet_03.pdf, sheet_01.pdf]
+回答テキスト
+  │
+  ├── 引用チャンク（sheet_13, chunk_005）
+  │     │
+  │     ├── source_markdown → outputs/.../vlm_parsed/sheet_13.md（VLM 解析結果）
+  │     ├── source_pdf      → outputs/.../pdf/sheet_13.pdf（元シート PDF）
+  │     └── source_image    → outputs/.../images/sheet_13/full.png（レンダリング画像）
+  │
+  └── グラフノード（API: 発注キャンセル）
+        └── source_file → sheet_13.md (抽出元)
 ```
 
-### ローカルファイルだけで試す / Try Without S3
+### トレーシングチェーン
 
-S3が使えない場合、ローカルファイルから直接解析できます：
+| レイヤー | ファイル | 説明 |
+|---------|---------|------|
+| L1: チャンク | `chunks.jsonl` | 分割されたテキスト + メタデータ |
+| L2: Markdown | `vlm_parsed/sheet_NN.md` | VLM が生成した構造化テキスト |
+| L3: PDF | `pdf/sheet_NN.pdf` | LibreOffice で変換した忠実な PDF |
+| L4: 画像 | `images/sheet_NN/full.png` | レンダリング済み PNG 画像 |
+| L5: Excel | S3 上の元ファイル | 最終的なソース |
 
-```bash
-# ローカルExcelファイルを解析
-dualrag parse --file /path/to/your/設計書.xlsx --output-dir outputs/local_test
+### なぜエビデンスが重要か
 
-# KB構築
-dualrag build-kb outputs/local_test/run_*/設計書/vlm_parsed/ \
-  --project-id "local_test"
+日本企業の Excel 設計書には以下の特徴があり、AI の回答が正しいか人間が確認できることが不可欠です：
 
-# QA
-dualrag qa --project-id "local_test"
-```
+- **レイアウトに意味がある**: セルの色、矢印、位置関係がビジネスロジックを表現する
+- **暗黙の前提が多い**: Excel シート内の注釈や補足が重要な制約条件を含む
+- **複数シートの整合性**: あるシートの情報が他のシートの条件に依存する
 
-### よくある質問形式 / Question Examples
-
-以下のような日本語の質問が有効です：
-
-```
-「APIのフィールドマッピングを教えてください」
-「〇〇システムから△△へのデータフローを説明して」
-「この伝票の必須項目は何ですか？」
-「変換ルールの条件分岐を教えて」
-「エラー処理のフローを説明してください」
-```
+エビデンストレーシングにより：
+1. AI の回答が正確かどうか、元の PDF/画像で視覚的に確認できる
+2. 回答の根拠となったシートとチャンクが明確に特定できる
+3. 不明確な場合、元の Excel に戻って手動確認できる
 
 ---
 
-## 7. マルチプロジェクト対応 / Multi-Project Isolation
+## 10. 検証とトラブルシューティング
 
-### 仕組み / How It Works
-
-LanceDBの全チャンクとNeptuneの全ノード/エッジには `project_id` が付与されます。
-クエリ時には指定された `project_id` のデータ**のみ**がフィルタリングされます。
-
-```
-プロジェクトA: サンプル20260519（受発注データ連携設計書）
-プロジェクトB: 14_債務奉行クラウド（債務奉行クラウドAPI連携設計書）
-
---project-id "サンプル20260519" で検索:
-  → プロジェクトAのチャンクのみ取得
-  → プロジェクトAのグラフノードのみ取得
-  → プロジェクトBのデータは一切表示されない
-```
-
-### project_id のルール / project_id Rules
-
-**⚠️ 重要: `project_id` はS3ディレクトリ名と完全一致でなければなりません。**
-
-| S3パス | 正しい project_id | ❌ 間違い |
-|--------|------------------|-----------|
-| `s3://bucket/サンプル20260519/` | `サンプル20260519` | `sample_20260519` |
-| `s3://bucket/14_債務奉行クラウド/` | `14_債務奉行クラウド` | `saimu_bugyo_cloud` |
-
-正規化、翻訳、短縮、名前変更は**禁止**です。
-
-### マルチプロジェクトの使い方 / Using Multi-Project
+### 10.1 解析の成否確認
 
 ```bash
-# プロジェクトAを構築
-dualrag parse --s3-prefix "サンプル20260519/" --project-id "サンプル20260519"
-dualrag build-kb outputs/サンプル20260519/run_*/vlm_parsed/ --project-id "サンプル20260519"
+# vlm_parsed/ に Markdown ファイルが生成されていることを確認
+ls outputs/プロジェクト名/ワークブック名/vlm_parsed/
 
-# プロジェクトBを構築
-dualrag parse --s3-prefix "14_債務奉行クラウド/" --project-id "14_債務奉行クラウド"
-dualrag build-kb outputs/14_債務奉行クラウド/run_*/vlm_parsed/ --project-id "14_債務奉行クラウド"
+# 生成されたファイル数の確認
+find outputs/プロジェクト名/ -name "sheet_*.md" -path "*/vlm_parsed/*" | wc -l
 
-# 各プロジェクトに独立してクエリ
-dualrag qa --project-id "サンプル20260519"
-dualrag qa --project-id "14_債務奉行クラウド"
+# sheet_name_mapping.csv でシート名の対応を確認
+cat outputs/プロジェクト名/ワークブック名/sheet_name_mapping.csv
 ```
 
-### `--project-id` を忘れた場合 / What Happens Without project_id
-
-| コマンド | 動作 |
-|---------|------|
-| `build-kb` | ⚠️ 警告表示、空のproject_idでデータ保存（後でフィルタ不可） |
-| `qa` | ⚠️ 全プロジェクト横断検索（異なるプロジェクトの結果が混在する可能性） |
-
-**本番環境では必ず `--project-id` を指定してください。**
-
-### 分離の確認 / Verify Isolation
+### 10.2 LanceDB チャンク確認
 
 ```bash
-# 存在しないproject_idでクエリ → 結果0件で正常
-dualrag qa --project-id "nonexistent_project" "test query"
-
-# デモスクリプトで分離テスト
-uv run python scripts/demo_qa_evidence_flow.py \
-  --project-id "14_債務奉行クラウド" --no-answer "仕入伝票API"
+# Python で直接確認
+uv run python -c "
+import lancedb
+db = lancedb.connect('/home/ubuntu/projects/data/vector_store/lancedb')
+tbl = db.open_table('murata_excel_vlm_dual_rag')
+print(f'Total records: {tbl.count_rows()}')
+import pyarrow.compute as pc
+data = tbl.to_arrow()
+mask = pc.equal(data.column('project_id'), 'sample_20260529')
+print(f'Project records: {data.filter(mask).num_rows}')
+"
 ```
 
----
-
-## 8. 技術詳細 / Technical Details
-
-### プロジェクト構造 / Project Structure
-
-```
-hermes_bedrock_agent/
-│
-├── src/hermes_bedrock_agent/          # メインPythonパッケージ
-│   ├── config.py                      # 設定管理（.envから読み込み）
-│   ├── cli.py                         # CLIコマンド: parse, build-kb, qa
-│   │
-│   ├── clients/                       # AWSサービスラッパー
-│   │   ├── bedrock.py                 # Amazon Bedrock (LLM + 埋め込み)
-│   │   ├── neptune.py                 # Neptune Analytics (グラフクエリ)
-│   │   └── s3.py                      # S3 (ファイルリスト + ダウンロード)
-│   │
-│   ├── parsing/                       # ステージ1: ドキュメント → Markdown
-│   │   ├── s3_discovery.py            # S3内のExcel/PDFファイル検出
-│   │   ├── excel_parser.py            # Excel → シート別PDF (LibreOffice)
-│   │   ├── pdf_parser.py              # PDF → PNG画像 (タイリング対応)
-│   │   ├── vlm_client.py             # 画像 → Claude → Markdown
-│   │   ├── image_utils.py            # 画像タイリング、結合、リサイズ
-│   │   └── libreoffice.py            # LibreOffice UNO接続ヘルパー
-│   │
-│   ├── knowledge_base/                # ステージ2: Markdown → ナレッジベース
-│   │   ├── schemas.py                 # データモデル (Chunk, GraphNode等)
-│   │   ├── chunker.py                 # Markdownのセマンティックチャンク分割
-│   │   ├── vector_store.py            # チャンク埋め込み → LanceDB格納
-│   │   ├── graph_extractor.py         # エンティティ/関係抽出 (LLM)
-│   │   └── graph_loader.py            # グラフ → Neptune書き込み
-│   │
-│   ├── retrieval/                     # ステージ3: 検索 + 回答
-│   │   ├── vector_retriever.py        # LanceDB検索
-│   │   ├── graph_retriever.py         # Neptuneグラフコンテキスト取得
-│   │   ├── answer_generator.py        # 全証拠統合 → 回答生成
-│   │   └── query_router.py            # 検索+回答フロー全体の統制
-│   │
-│   └── qa/                            # 対話ターミナル
-│       └── terminal.py                # REPL (コマンド、スピナー、履歴)
-│
-├── scripts/                           # デモ・テスト用スクリプト
-│   ├── demo_qa_evidence_flow.py       # QA証拠フローの詳細デモ
-│   └── verify_project_isolation.py    # プロジェクト分離の自動テスト
-│
-├── outputs/                           # パイプライン出力（生成物、git管理外）
-├── pyproject.toml                     # プロジェクト定義 + 依存関係
-├── .env.example                       # 環境変数テンプレート
-├── .env                               # 実際の設定（コミット禁止）
-└── README.md                          # このファイル
-```
-
-### 8.1 VLM解析の仕組み / VLM Parsing Details
-
-```
-Excelシート
-    │
-    ▼ LibreOffice UNO API (port 2002)
-シート別PDFファイル（1シート=1ページ、書式保持）
-    │
-    ▼ pdftoppm (適応型DPI: 36〜150、シートサイズに応じて)
-PNG画像
-    │  ├─ 小さいシート (< 3000px) → 1枚の画像
-    │  └─ 大きいシート (> 3000px) → タイル分割（300pxオーバーラップ）
-    │
-    ▼ Claude Sonnet Multimodal (Bedrock Converse API経由)
-    │  1. シートタイプ自動検出 (mapping / flowchart / spec / overview)
-    │  2. タイプ別の専用プロンプト
-    │  3. タイル化シート: 各タイルを個別解析→統合
-    │  4. 3秒間隔（スロットリング防止）
-    │
-    ▼
-Markdown出力 (sheet_XX.md + メタデータJSON)
-```
-
-**⚠️ 重要な制約 / Critical Constraints:**
-
-| 制約 | 理由 |
-|------|------|
-| VLM呼び出しを並列化しない | 同時リクエストで300秒超のタイムアウトカスケード発生 |
-| シート間に最低3秒の間隔 | API スロットリング防止 |
-| `max_tokens` ≥ 12000 | 大規模マッピングシートは~8000トークン出力 |
-| `boto3 read_timeout` = 600秒 | デフォルト60秒ではタイムアウト |
-
-### 8.2 グラフDB (Neptune Analytics)
-
-2層のグラフ構造：
-
-**Business Semantic Graph（ビジネス意味グラフ）— 高レベル:**
-
-| ノードタイプ | 例 |
-|-------------|-----|
-| System | SAP S4/HANA, DataSpider, ANDPAD, 債務奉行クラウド |
-| DataFlow | 発注データパイプライン |
-| InterfaceSpec | IF定義 |
-| BusinessProcess | 登録、取消 |
-
-**Implementation Graph（実装グラフ）— 詳細レベル:**
-
-| ノードタイプ | 例 |
-|-------------|-----|
-| SourceTable / TargetTable | 仕入先データ, ANDPADペイロード |
-| SourceField / TargetField | 伝票No., 取引先管理ID |
-| MappingRule | フィールド変換ルール |
-| BusinessRule | 条件分岐、バリデーション |
-
-**アクセスパターン:**
-- プロトコル: openCypher (Gremlinではない)
-- 認証: IAM + SigV4署名
-- ノード更新: `MERGE` (追加のみ、既存データを削除しない)
-- 全クエリが `project_id` でフィルタ
-
-### 8.3 ベクトルDB (LanceDB)
-
-LanceDBはサーバー不要の軽量ベクトルデータベースです：
-
-| 項目 | 値 |
-|------|-----|
-| 保存先 | `VECTOR_LOCAL_STORE_PATH` (ローカルディスク) |
-| テーブル名 | `murata_excel_vlm_dual_rag` |
-| 埋め込み次元数 | 1024 (Titan Embed V2) |
-| 距離メトリック | コサイン類似度 |
-| フィルタリング | `project_id` による pre-filter |
-
-**検索の流れ:**
-1. 質問テキスト → Titan Embed V2 → 1024次元ベクトル
-2. LanceDBで最近傍K件を検索（コサイン類似度）
-3. `project_id` で事前フィルタリング
-4. マッチした行のメタデータから証拠PDF/PNGのパスを取得
-
-### 8.4 モデルID設定 (ap-northeast-1)
-
-東京リージョン (ap-northeast-1) では**推論プロファイルプレフィックス**が必須：
-
-| プレフィックス | スコープ | 例 |
-|---------------|---------|-----|
-| `jp.anthropic.*` | 日本のみ | `jp.anthropic.claude-sonnet-4-6` |
-| `apac.anthropic.*` | アジア太平洋 | `apac.anthropic.claude-sonnet-4-6` |
-| `global.anthropic.*` | グローバル | `global.anthropic.claude-sonnet-4-6` |
+### 10.3 Neptune グラフ確認
 
 ```bash
-# 利用可能なプロファイルを確認:
-aws bedrock list-inference-profiles --region ap-northeast-1 \
-  --query "InferenceProfileSummaries[].InferenceProfileId"
+uv run python -c "
+import os
+os.environ['NEPTUNE_GRAPH_ID'] = 'g-xxxxxxxxxx'
+os.environ['AWS_DEFAULT_REGION'] = 'ap-northeast-1'
+from hermes_bedrock_agent.clients.neptune import NeptuneClient
+c = NeptuneClient()
+
+# ノード数
+r = c.execute_query(\"MATCH (n) WHERE n.project_id = 'sample_20260529' RETURN count(n) AS cnt\")
+print(f'Nodes: {r[\"results\"][0][\"cnt\"]}')
+
+# エッジ数
+r = c.execute_query(\"MATCH ()-[r]->() WHERE r.project_id = 'sample_20260529' RETURN count(r) AS cnt\")
+print(f'Edges: {r[\"results\"][0][\"cnt\"]}')
+"
 ```
 
----
-
-## 9. トラブルシューティング / Troubleshooting
-
-### 「LibreOffice connection refused on port 2002」
-
-LibreOfficeが起動していないか、クラッシュしています：
+### 10.4 QA 検索確認
 
 ```bash
-# ゾンビプロセスを終了
+# ベクトル検索テスト
+uv run python -c "
+from dotenv import load_dotenv; load_dotenv('.env')
+from hermes_bedrock_agent.knowledge_base.vector_store import query_vector_store
+results = query_vector_store('発注情報', project_id='sample_20260529', top_k=3)
+for r in results:
+    print(f'  sheet={r[\"sheet_name\"]} type={r[\"chunk_type\"]} dist={r[\"_distance\"]:.3f}')
+"
+```
+
+### 10.5 エビデンスパス確認
+
+```bash
+# チャンクに記録された PDF パスが実在するか確認
+uv run python -c "
+import json, os
+from pathlib import Path
+chunk_file = 'outputs/サンプル20260529/wb2_mapping/dual_rag/chunks.jsonl'
+with open(chunk_file) as f:
+    chunk = json.loads(f.readline())
+pdf_path = chunk['source_pdf_s3_path'].replace('s3://s3-hulftchina-rd/', '')
+print(f'PDF path: {pdf_path}')
+print(f'Exists: {os.path.exists(pdf_path)}')
+"
+```
+
+### 10.6 よくある問題と対処法
+
+#### 「LibreOffice connection refused on port 2002」
+
+LibreOffice が起動していません：
+
+```bash
 pkill -f soffice
-# 再起動
 soffice --headless --accept="socket,host=localhost,port=2002;urp;" --norestore &
 sleep 3
-# 確認
 lsof -i :2002
 ```
 
-### 「ValidationException: model ID not found」
+#### 「ValidationException: model ID not found」
 
-モデルIDのフォーマットが間違っています：
-
-```bash
-# ❌ 間違い:
-BEDROCK_VLM_MODEL_ID=anthropic.claude-sonnet-4-20250514-v1:0
-
-# ✅ 正しい:
-BEDROCK_VLM_MODEL_ID=jp.anthropic.claude-sonnet-4-6
-```
-
-### 「VLM call timed out after 60 seconds」
-
-boto3のデフォルトタイムアウトが短すぎます。設定で `read_timeout=600` を使用:
-
-```python
-from botocore.config import Config
-bedrock_config = Config(read_timeout=600, retries={"max_attempts": 3})
-```
-
-### 「LanceDB table not found」
-
-ナレッジベースがまだ構築されていません：
+モデル ID フォーマットが間違っています：
 
 ```bash
-dualrag build-kb outputs/your_project/vlm_parsed/ --project-id "your_project"
+# ❌ 間違い
+VISION_LLM_MODEL_ID=anthropic.claude-sonnet-4-20250514-v1:0
+
+# ✅ 正しい（推論プロファイルプレフィックス付き）
+VISION_LLM_MODEL_ID=jp.anthropic.claude-sonnet-4-6
 ```
 
-### 「Neptune: connection error」
+#### 「VLM call timed out」
 
-Neptuneはオプションです。設定しなくてもQAは動作します：
-- `build-kb` → `--skip-graph` で警告を抑制
-- `qa` → `--no-graph` で警告を抑制
+boto3 のデフォルトタイムアウトが短すぎます。config で `read_timeout=600` を使用してください。
 
-### 「0 chunks retrieved in QA」
+#### 「LanceDB table not found」
+
+ナレッジベースがまだ構築されていません。`dualrag build-kb` を先に実行してください。
+
+#### 「Neptune: connection error」
+
+Neptune はオプションです。以下で回避可能：
+- `dualrag build-kb` → `--skip-graph` を追加
+- `dualrag qa` → `--no-graph` を追加
+
+#### 「0 chunks retrieved in QA」
 
 考えられる原因：
-1. **project_id が間違い** — `build-kb` 時と同じIDを使用していますか？
-2. **LanceDBが空** — `tbl.count_rows()` で確認
-3. **質問が短すぎる** — より具体的な質問を試してください
+1. **project_id 不一致** — `build-kb` 時と `qa` 時で同じ ID を使っていますか？
+2. **LanceDB が空** — `tbl.count_rows()` で確認
+3. **質問が抽象的すぎる** — より具体的なキーワードで試す
 
-### 「Evidence images: 0」
+#### 「Evidence images: 0」
 
-PDFファイルがメタデータの示す場所にありません：
+チャンクに記録された PDF パスにファイルが存在しないため、マルチモーダル入力用の証拠画像をロードできていません。
+
+> ⚠️ この場合でも QA は回答を生成しますが、**回答品質が低下する可能性があります**。VLM がテキストのみで回答するため、元の設計書の視覚的情報（レイアウト、矢印、色分け等）が参照されません。正確性が重要な回答については、対応する PDF/画像ファイルを手動で確認してください。
+
+原因確認：
 ```bash
-# チャンクが期待するパスを確認:
-head -1 outputs/*/dual_rag/chunks.jsonl | python3 -c "
+# チャンクの source_pdf_s3_path を確認
+head -1 outputs/サンプル20260529/*/dual_rag/chunks.jsonl | python3 -c "
 import json, sys
 chunk = json.loads(sys.stdin.read())
 print(chunk.get('source_pdf_s3_path'))
 "
 ```
 
+#### 日本語パス / Unicode の問題
+
+macOS で作成されたファイル名は NFD 形式（濁点・半濁点が分離した Unicode）になることがあります。Linux 上では NFC を使用するため、ファイルパス解決に失敗することがあります。
+
+対処法：
+```bash
+# NFD ファイル名の検出
+find outputs/ -name "*.xlsx" | uconv -x nfc | diff - <(find outputs/ -name "*.xlsx")
+```
+
 ---
 
-## 10. 開発者向け / Development
+## 11. 制限事項と注意点
 
-### テスト実行 / Running Tests
+### 既知の制限
+
+| 制限事項 | 説明 | 回避策 |
+|---------|------|--------|
+| VLM 解析の精度 | 複雑なレイアウトは VLM の解釈が不正確になる場合がある | 出力 Markdown を手動確認。重要な設計書は human-in-the-loop |
+| Excel 図形の読取り | LibreOffice の PDF 変換では一部の Excel 図形が正確に描画されない場合がある | PNG レンダリングの品質を確認 |
+| 大規模シート | 3000px を超えるシートはタイル分割されるため、タイル境界で情報が断絶する可能性 | 300px のオーバーラップで緩和済みだが、境界部分の確認推奨 |
+| 並列実行不可 | VLM 解析は逐次実行のみ | 大量シートの処理には時間がかかる（目安: 29シートで約90分） |
+| Neptune オプション | Neptune 未設定時はグラフ検索なし | ベクトル検索のみでも基本的な QA は動作する |
+
+### 人間による確認が推奨されるケース
+
+以下のケースでは、VLM の解析結果を人間が確認することを推奨します：
+
+1. **複雑なフローチャート** — 多数の分岐条件、ループ、並列パスを含むフロー
+2. **密集したマッピング表** — 100行以上のフィールドマッピング（タイル分割で一部見落としの可能性）
+3. **色だけで区別される情報** — セルの背景色のみで意味を伝えている場合
+4. **手書き風の注釈** — Excel のフリーフォームテキストボックスや手書き矢印
+5. **複数シートの整合性** — クロスリファレンスが正しく抽出されているか
+
+### Mermaid ファイルの優先利用
+
+プロジェクト内に `.mmd` ファイル（Mermaid フローチャート）が存在する場合：
+
+- VLM が画像から推定したフローよりも `.mmd` ファイルの内容を **ground-truth として優先**
+- フローチャートの正確性が求められる場合、元の Excel から Mermaid 記法を人間が作成しておくことを推奨
+- `.mmd` ファイルは parse ステージでテキストとして取り込まれ、チャンクに含まれる
+
+### コスト概算
+
+| ステージ | コスト要因 | 目安 |
+|---------|-----------|------|
+| parse (VLM) | Claude Sonnet 入力: 画像 + 出力: Markdown | 29 シートで約 $20〜$30 |
+| build-kb (embedding) | Titan Embed V2 テキスト埋め込み | 数百チャンクで $0.01 未満 |
+| graph (LLM extraction) | Claude Sonnet グラフ抽出 | シートあたり約 $0.5 |
+| qa (回答生成) | Claude Sonnet マルチモーダル推論 | 1 質問あたり約 $0.05〜$0.10 |
+
+> ⚠️ **注意:** 上記の金額は参考値です。実際のコストは、使用するモデル（Claude Sonnet / Opus）、シート数、画像サイズ、入出力トークン量、および回答の長さによって大きく変動します。最新の Bedrock 料金表を確認してください。
+
+---
+
+## 12. 納品チェックリスト
+
+プロジェクト納品時に以下の項目を順に確認してください。
+
+### 環境準備
+
+- [ ] AWS クレデンシャルが設定されている (`aws sts get-caller-identity` で確認)
+- [ ] `.env` ファイルが正しく設定されている（S3 バケット、モデル ID、LanceDB パス）
+- [ ] `dualrag --help` で 4 コマンドが表示される
+- [ ] LibreOffice が起動している（Excel 解析時のみ: `lsof -i :2002`）
+
+### データ投入
+
+- [ ] S3 にドキュメントがアップロードされている (`aws s3 ls s3://バケット名/サンプル20260529/`)
+- [ ] `dualrag parse` が正常完了し、`vlm_parsed/` に Markdown が生成されている
+- [ ] `sheet_name_mapping.csv` でシート番号と日本語シート名の対応が確認できる
+
+### ナレッジベース構築
+
+- [ ] LanceDB にプロジェクトのチャンクが格納されている（`project_id = sample_20260529`）
+- [ ] Neptune にプロジェクトのノード/エッジが格納されている（`project_id = sample_20260529`）
+- [ ] 複数ワークブックがある場合、全ワークブックのチャンクが LanceDB に存在する
+
+### QA 動作確認
+
+- [ ] `dualrag qa --project-id "sample_20260529"` で対話ターミナルが起動する
+- [ ] テスト質問に対して回答が生成される（例: 「発注情報のフィールドマッピングを教えてください」）
+- [ ] 回答にシート番号やソースの引用が含まれている
+
+### エビデンストレーシング
+
+- [ ] 回答で引用されたチャンクの `source_pdf_s3_path` が実際のファイルを指している
+- [ ] ローカルに PDF / 画像ファイルが存在する（`outputs/サンプル20260529/*/pdf/`）
+- [ ] `/evidence` コマンドで Evidence images が 1 以上表示される
+
+### 品質確認（推奨）
+
+- [ ] 主要なシートの VLM 解析結果 Markdown を目視確認（フローチャート、マッピング表）
+- [ ] 複雑なフローチャートがある場合、`.mmd` ファイルとの整合性を確認
+- [ ] グラフ検索で主要システム間の関係が取得できることを確認
+
+---
+
+## 付録: デモスクリプト
+
+開発・検証用のスクリプトが `scripts/` に用意されています：
 
 ```bash
-uv run pytest -v
-uv run pytest tests/test_chunker.py -v
-```
-
-### Lint
-
-```bash
-uv run ruff check src/
-uv run ruff check src/ --fix
-```
-
-### インポート確認 / Verify Imports
-
-```bash
-uv run python -c "
-from hermes_bedrock_agent.config import config
-from hermes_bedrock_agent.clients.bedrock import BedrockLLMAdapter
-from hermes_bedrock_agent.knowledge_base.schemas import Chunk, QAAnswerResponse
-from hermes_bedrock_agent.retrieval.query_router import answer
-print('All imports OK')
-"
-```
-
-### デモスクリプト / Demo Scripts
-
-```bash
-# QA証拠フローのデモ（各ステップを詳細表示）
+# QA 証拠フローのデモ（各ステップを詳細表示）
 uv run python scripts/demo_qa_evidence_flow.py \
-  --project-id "14_債務奉行クラウド" \
-  "仕入伝票APIのデータ形式"
+  --project-id "sample_20260529" \
+  "発注情報のフィールドマッピング"
 
-# プロジェクト分離テスト
+# プロジェクト分離の自動テスト
 uv run python scripts/verify_project_isolation.py
 ```
-
-### 新しいドキュメントタイプの追加 / Adding New Document Types
-
-新しいパーサー（例: Wordドキュメント対応）を追加するには：
-
-1. `src/hermes_bedrock_agent/parsing/word_parser.py` を作成
-2. .docx → Markdown 変換関数を実装
-3. `s3_discovery.py` のファイルタイプ分類にファイル拡張子を追加
-4. `cli.py` の `parse` コマンドにフックを追加
-
-ステージ2（KB構築）とステージ3（QA）はMarkdown入力で動作するため、ソースフォーマットに関係なく、ステージ1のみ変更すれば対応可能です。
-
----
-
-## 現在のデータベース状況 / Current Database Status
-
-| プロジェクト | LanceDB | Neptune ノード | Neptune エッジ | 状態 |
-|-------------|---------|---------------|---------------|------|
-| サンプル20260519 | 468行 | 1,939 | 3,366 | ✅ 完了 |
-| 14_債務奉行クラウド | 267行 | 1,515 | 1,892 | ✅ 完了 |
-| **合計** | **735行** | **3,454** | **5,258** | |
 
 ---
 

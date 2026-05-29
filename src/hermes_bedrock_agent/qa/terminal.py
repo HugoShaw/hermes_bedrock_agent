@@ -341,45 +341,49 @@ def _run_retrieve(query: str, s: _Session) -> None:
 
 def _run_answer(query: str, s: _Session) -> None:
     from ..retrieval.answer_generator import generate_answer, load_evidence_images
-    from ..retrieval.graph_retriever import fetch_dual_graph_context
-    from ..retrieval.vector_retriever import retrieve_chunks
+    from ..retrieval.graph_guided_retrieval import retrieve_with_graph_guidance
     from ..config import config
 
     t0 = time.time()
 
-    # Step 1: Markdown chunk retrieval
-    with _Spinner("① Retrieving Markdown chunks…"):
-        chunks = retrieve_chunks(query=query, top_k=s.top_k, project_id=s.project_id)
+    # Step 1: Graph-guided retrieval (graph exploration → guided vector search → merge)
+    with _Spinner("①② Graph-guided retrieval (graph exploration + vector search)…"):
+        chunks, dual_graph, guidance_status = retrieve_with_graph_guidance(
+            query=query, top_k=s.top_k, project_id=s.project_id,
+        )
     t1 = time.time()
-    _step("① Markdown chunk retrieval", t1 - t0)
+    # Show guidance status
+    _guidance_labels = {
+        "strong": _c("ACTIVE", BGREEN) + _c(" (focused sheet filter applied)", DIM),
+        "weak": _c("WEAK", BYELLOW) + _c(" (over-broad hints, context only — no vector filter)", DIM),
+        "none": _c("NONE", DIM) + _c(" (no graph match, pure vector retrieval)", DIM),
+        "error": _c("ERROR", RED) + _c(" (Neptune failed, fell back to vector)", DIM),
+    }
+    status_label = _guidance_labels.get(guidance_status, guidance_status)
+    _step(f"①② Graph-guided retrieval — {status_label}", t1 - t0)
     _print_chunks(chunks, verbose=s.verbose)
 
-    # Step 2: Dual-layer graph context retrieval
-    dual_graph = None
-    with _Spinner("②③ Retrieving graph context (business + implementation)…"):
-        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=s.project_id) if chunks else None
-    t2 = time.time()
-    _step("②③ Graph context retrieval", t2 - t1)
+    # Show graph context
     if dual_graph and not dual_graph.is_empty:
         _print_dual_graph(dual_graph)
     else:
         _print_graph(None)
 
-    # Step 3: PDF/PNG evidence resolution from chunk metadata
+    # Step 2: PDF/PNG evidence resolution from chunk metadata
     evidence_images: list = []
     if s.evidence and chunks:
-        with _Spinner("④ Loading PDF/PNG evidence images…"):
+        with _Spinner("③ Loading PDF/PNG evidence images…"):
             evidence_images = load_evidence_images(chunks, config.project_root)
-        t3 = time.time()
-        _step(f"④ Evidence image resolution ({len(evidence_images)} pages)", t3 - t2)
+        t2 = time.time()
+        _step(f"③ Evidence image resolution ({len(evidence_images)} pages)", t2 - t1)
     else:
-        t3 = t2
+        t2 = t1
 
     # Print evidence flow summary
-    _print_evidence_flow(chunks, dual_graph, evidence_images, t3 - t0, project_id=s.project_id)
+    _print_evidence_flow(chunks, dual_graph, evidence_images, t2 - t0, project_id=s.project_id)
 
-    # Step 4: Multimodal VLM answer generation with full evidence pack
-    with _Spinner("Generating grounded answer (VLM)…"):
+    # Step 3: Multimodal VLM answer generation with full evidence pack
+    with _Spinner("④ Generating grounded answer (VLM)…"):
         ans = generate_answer(
             query=query,
             retrieved_chunks=chunks,
@@ -388,13 +392,13 @@ def _run_answer(query: str, s: _Session) -> None:
             business_graph=dual_graph.business if dual_graph else None,
             implementation_graph=dual_graph.implementation if dual_graph else None,
         )
-    t4 = time.time()
-    _step("VLM answer generation", t4 - t3)
+    t3 = time.time()
+    _step("④ VLM answer generation", t3 - t2)
 
     s.total_in_tok += ans.input_tokens
     s.total_out_tok += ans.output_tokens
-    s.total_latency += t4 - t0
-    _print_answer(ans, elapsed=t4 - t0)
+    s.total_latency += t3 - t0
+    _print_answer(ans, elapsed=t3 - t0)
 
 
 def _run_graph(query: str, s: _Session) -> None:

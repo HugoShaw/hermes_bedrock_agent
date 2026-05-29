@@ -58,7 +58,7 @@ class TestCLIParsing:
         assert args.use_enrichment is False
         assert args.show_prompt is False
         assert args.no_color is False
-        assert args.neptune_endpoint == "g-nbuyck5yl8.ap-northeast-1.neptune-graph.amazonaws.com"
+        assert args.neptune_endpoint == "g-example01.ap-northeast-1.neptune-graph.amazonaws.com"
 
     def test_neptune_graph_id_cli(self):
         from qa_terminal import parse_args
@@ -84,7 +84,7 @@ class TestCLIParsing:
         assert args.neptune_graph_id == "g-abc123"
 
     def test_neptune_graph_id_default_inferred(self):
-        """Default endpoint should yield g-nbuyck5yl8."""
+        """Default endpoint should yield g-example01."""
         from qa_terminal import parse_args
 
         # If env has NEPTUNE_GRAPH_ID, CLI infers from env first
@@ -92,8 +92,8 @@ class TestCLIParsing:
         from qa_terminal import extract_graph_id_from_endpoint
 
         assert extract_graph_id_from_endpoint(
-            "g-nbuyck5yl8.ap-northeast-1.neptune-graph.amazonaws.com"
-        ) == "g-nbuyck5yl8"
+            "g-example01.ap-northeast-1.neptune-graph.amazonaws.com"
+        ) == "g-example01"
 
     def test_mock_answer_flag(self):
         from qa_terminal import parse_args
@@ -139,8 +139,8 @@ class TestGraphIdExtraction:
         from qa_terminal import extract_graph_id_from_endpoint
 
         assert extract_graph_id_from_endpoint(
-            "g-nbuyck5yl8.ap-northeast-1.neptune-graph.amazonaws.com"
-        ) == "g-nbuyck5yl8"
+            "g-testnode01.ap-northeast-1.neptune-graph.amazonaws.com"
+        ) == "g-testnode01"
 
     def test_different_region(self):
         from qa_terminal import extract_graph_id_from_endpoint
@@ -180,7 +180,7 @@ class TestDisplayHelpers:
     def test_shorten_uri_long_path(self):
         from qa_terminal import shorten_uri
 
-        uri = "s3://s3-hulftchina-rd/Murata/docs/subsystem/module/JournalBaseService.java"
+        uri = "s3://my-bucket/Murata/docs/subsystem/module/JournalBaseService.java"
         short = shorten_uri(uri, max_len=40)
         assert "JournalBaseService.java" in short
         assert "..." in short
