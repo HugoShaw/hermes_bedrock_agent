@@ -29,8 +29,8 @@ The final graph must support:
 - manual graph exploration through Graph Explorer
 
 note that:
-- working directory: ~/projects/hermes_bedrock_agent
-- Neptune Graph endpoint: g-mfp35h7j98.ap-northeast-1.neptune-graph.amazonaws.com
+- working directory: (project root)
+- Neptune Graph endpoint: (set via NEPTUNE_ENDPOINT env var)
 
 ---
 

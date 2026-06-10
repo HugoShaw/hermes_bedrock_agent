@@ -319,7 +319,7 @@ TEXT_LLM_MODEL_ID=jp.anthropic.claude-sonnet-4-6
 EMBEDDING_MODEL_ID=amazon.titan-embed-text-v2:0
 
 # ベクトルDB ローカル保存先
-VECTOR_LOCAL_STORE_PATH=/home/ubuntu/projects/data/vector_store/lancedb
+VECTOR_LOCAL_STORE_PATH=~/projects/data/vector_store/lancedb
 
 # ━━━━ オプション設定 ━━━━
 
@@ -933,7 +933,7 @@ head -10 outputs/yangma_v2/parsed/*.md | grep -A5 "^---"
 # Python で直接確認
 uv run python -c "
 import lancedb
-db = lancedb.connect('/home/ubuntu/projects/data/vector_store/lancedb')
+db = lancedb.connect('~/projects/data/vector_store/lancedb')
 tbl = db.open_table('murata_excel_vlm_dual_rag')
 print(f'Total records: {tbl.count_rows()}')
 import pyarrow.compute as pc

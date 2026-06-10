@@ -17,8 +17,8 @@ Put uncertain or weakly inferred knowledge into pending/candidate, not verified 
 ```
 
 note that:
-- working directory: ~/projects/hermes_bedrock_agent
-- Neptune Graph endpoint: g-mfp35h7j98.ap-northeast-1.neptune-graph.amazonaws.com
+- working directory: (project root)
+- Neptune Graph endpoint: (set via NEPTUNE_ENDPOINT env var)
 
 ---
 

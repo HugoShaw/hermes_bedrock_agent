@@ -31,7 +31,7 @@ class Config:
     lancedb_path: str = field(
         default_factory=lambda: os.getenv(
             "VECTOR_LOCAL_STORE_PATH",
-            "/home/ubuntu/projects/data/vector_store/lancedb",
+            str(Path.home() / "projects" / "data" / "vector_store" / "lancedb"),
         )
     )
     vector_collection: str = field(
