@@ -136,7 +136,7 @@ def parse(
             all_images = render_all_sheets(sheet_pdfs, str(image_dir))
 
             logger.info("Stage 4: VLM Parsing")
-            parse_results = parse_all_sheets(all_images, str(parsed_dir), resume=True)
+            parse_results = parse_all_sheets(all_images, str(parsed_dir), resume=True, workbook_name=wb_name)
 
             logger.info("Stage 5: Markdown Post-processing")
             parse_results = post_process_all(parse_results)
@@ -148,8 +148,73 @@ def parse(
             })
             logger.info("Done: %d sheets parsed → %s", len(parse_results), parsed_dir)
 
+    # ─── Stage 6: Mermaid / Ground-truth file parsing ───────────────────────
+    mermaid_summary: list[dict] = []
+    if s3_prefix and manifest.ground_truth_files:
+        from .parsing.models import FileType
+        from .parsing.mermaid_parser import parse_mermaid_file, detect_mermaid_in_markdown
+        from .parsing.flowchart_linker import link_mermaid_to_excel
+        from .parsing.s3_discovery import download_mermaid_files
+
+        logger.info("Stage 6: Mermaid / Ground-truth file parsing")
+        manifest = download_mermaid_files(manifest, str(run_dir / "downloads"))
+
+        mermaid_results: list[tuple[str, str, Any]] = []  # (stem, source_key, result)
+        mermaid_out_dir = run_dir / "mermaid"
+        for stem, s3f in manifest.ground_truth_files.items():
+            if s3f.file_type == FileType.MERMAID and s3f.local_path:
+                out = mermaid_out_dir / stem
+                result = parse_mermaid_file(s3f.local_path, str(out))
+                mermaid_results.append((stem, s3f.key, result))
+                logger.info("  Mermaid: %s → %d nodes, %d edges", stem, len(result.nodes), len(result.edges))
+            elif s3f.file_type == FileType.MARKDOWN and s3f.local_path:
+                blocks = detect_mermaid_in_markdown(s3f.local_path)
+                if blocks:
+                    logger.info("  Markdown %s: found %d mermaid blocks", stem, len(blocks))
+                    for i, block in enumerate(blocks):
+                        block_stem = f"{stem}_block{i}"
+                        block_out = mermaid_out_dir / block_stem
+                        block_out.mkdir(parents=True, exist_ok=True)
+                        block_file = block_out / "extracted.mmd"
+                        block_file.write_text(block, encoding="utf-8")
+                        result = parse_mermaid_file(str(block_file), str(block_out))
+                        mermaid_results.append((block_stem, s3f.key, result))
+
+        # Attempt linking (results recorded regardless of confidence)
+        links = []
+        if mermaid_results:
+            raw_results = [r for _, _, r in mermaid_results]
+            links = link_mermaid_to_excel(raw_results, summary, str(run_dir))
+            for link in links:
+                logger.info(
+                    "  Link: %s → %s (confidence=%.2f)",
+                    Path(link.mermaid_source).name,
+                    link.excel_workbook or "(none)",
+                    link.match_confidence,
+                )
+
+        # Build mermaid_files summary
+        for i, (stem, source_key, result) in enumerate(mermaid_results):
+            link = links[i] if i < len(links) else None
+            mermaid_summary.append({
+                "stem": stem,
+                "source_key": source_key,
+                "nodes": len(result.nodes),
+                "edges": len(result.edges),
+                "subgraphs": len(result.subgraphs),
+                "diagram_type": result.diagram_type,
+                "output_dir": f"mermaid/{stem}/",
+                "linked_to_workbook": link.excel_workbook if link else None,
+                "link_confidence": link.match_confidence if link else 0.0,
+                "is_ground_truth": link.mermaid_preferred if link else True,
+            })
+
+    parse_summary = {
+        "workbooks": summary,
+        "mermaid_files": mermaid_summary,
+    }
     summary_path = run_dir / "parse_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+    summary_path.write_text(json.dumps(parse_summary, indent=2, ensure_ascii=False))
     console.print(f"[green]Parse complete.[/green] Summary: {summary_path}")
 
 
@@ -165,6 +230,7 @@ def build_kb(
     s3_pdf_prefix: str = typer.Option("", "--s3-pdf-prefix", help="S3 prefix for PDF evidence (defaults to outputs/<dir>/pdf)"),
     output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Output directory for chunks.jsonl"),
     project_id: Optional[str] = typer.Option(None, "--project-id", help="Project ID for multi-project isolation"),
+    append: bool = typer.Option(False, "--append", "-a", help="Append to existing project data (don't delete previous workbooks' chunks)"),
     skip_vector: bool = typer.Option(False, "--skip-vector", help="Skip LanceDB embedding"),
     skip_graph: bool = typer.Option(False, "--skip-graph", help="Skip Neptune graph loading"),
     dry_run_graph: bool = typer.Option(False, "--dry-run-graph", help="Extract graph but don't write to Neptune"),
@@ -225,7 +291,7 @@ def build_kb(
 
     if not skip_vector:
         logger.info("Step 2: Loading vector store")
-        written = load_vector_store(chunks, project_id=effective_project_id)
+        written = load_vector_store(chunks, project_id=effective_project_id, replace_project=not append)
         results["vector_written"] = written
         console.print(f"LanceDB: [cyan]{written}[/cyan] records written")
     else:
@@ -263,6 +329,7 @@ def qa(
     query: Optional[str] = typer.Argument(None, help="One-shot query (omit for interactive mode)"),
     catalog_dir: Optional[Path] = typer.Option(None, "--catalog-dir", help="Dir with sheet_name_mapping.csv + vlm_parsed/"),
     project_id: Optional[str] = typer.Option(None, "--project-id", help="Project ID to scope retrieval (required for multi-project)"),
+    collection: Optional[str] = typer.Option(None, "--collection", help="Override LanceDB collection (for experiment eval)"),
     mode: str = typer.Option("answer", "--mode", "-m", help="Mode: retrieve|answer|graph"),
     top_k: int = typer.Option(5, "--top-k", "-k", help="Number of chunks to retrieve"),
     no_graph: bool = typer.Option(False, "--no-graph", help="Skip Neptune graph context"),
@@ -278,14 +345,14 @@ def qa(
         # One-shot mode
         from .retrieval.query_router import answer as do_answer, retrieve, format_response
         if mode == "answer":
-            resp = do_answer(query, top_k=top_k, include_graph=not no_graph, project_id=effective_project_id)
+            resp = do_answer(query, top_k=top_k, include_graph=not no_graph, collection=collection, project_id=effective_project_id)
         else:
-            resp = retrieve(query, top_k=top_k, include_graph=(mode == "graph"), project_id=effective_project_id)
+            resp = retrieve(query, top_k=top_k, include_graph=(mode == "graph"), collection=collection, project_id=effective_project_id)
         print(format_response(resp, verbose=True))
     else:
         # Interactive terminal
         from .qa.terminal import run_terminal
-        run_terminal(catalog_dir=catalog_dir, project_id=effective_project_id)
+        run_terminal(catalog_dir=catalog_dir, project_id=effective_project_id, collection=collection)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -313,6 +380,7 @@ def graph(
         dualrag graph outputs/サンプル20260519 --project-id sample_20260519 --dry-run
     """
     _setup_logging("DEBUG" if verbose else "INFO")
+    from .config import config  # noqa: F401 — triggers load_dotenv for NEPTUNE_GRAPH_ID
     from .graph_pipeline import run_pipeline, GraphPipelineConfig
 
     cfg = GraphPipelineConfig(
@@ -343,7 +411,77 @@ def graph(
     console.print(f"  Output dir: {result.output_dir}")
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# prompts — Prompt version management
+# ═══════════════════════════════════════════════════════════════════════════════
+
+prompts_app = typer.Typer(name="prompts", help="Manage graph extraction prompt versions.")
+
+
+@prompts_app.command("list")
+def prompts_list() -> None:
+    """Show all registered prompt versions."""
+    from .prompts.registry import list_versions, get_current_version
+
+    current = get_current_version()
+    versions = list_versions()
+
+    for pv in versions:
+        marker = " *active*" if pv.version == current else ""
+        status = "exists" if pv.prompt_file.exists() else "MISSING"
+        console.print(
+            f"  [cyan]{pv.version:<10}[/cyan] {pv.name:<35} "
+            f"scope={pv.scope:<10} file={status}[green]{marker}[/green]"
+        )
+
+
+@prompts_app.command("show")
+def prompts_show(
+    version_id: str = typer.Argument(..., help="Prompt version ID (e.g. v4.3, baseline, v4.4)"),
+) -> None:
+    """Show details of a specific prompt version."""
+    from .prompts.registry import get_version, get_current_version
+
+    try:
+        pv = get_version(version_id)
+    except KeyError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    current = get_current_version()
+    console.print(f"[bold]Version:[/bold]     {pv.version}")
+    console.print(f"[bold]Name:[/bold]        {pv.name}")
+    console.print(f"[bold]Description:[/bold] {pv.description}")
+    console.print(f"[bold]Scope:[/bold]       {pv.scope}")
+    console.print(f"[bold]Created:[/bold]     {pv.created_at}")
+    console.print(f"[bold]File:[/bold]        {pv.prompt_file}")
+    console.print(f"[bold]File exists:[/bold] {pv.prompt_file.exists()}")
+    console.print(f"[bold]SHA-256:[/bold]     {pv.sha256[:16]}..." if pv.sha256 else "[bold]SHA-256:[/bold]     (file missing)")
+    console.print(f"[bold]Active:[/bold]      {'yes' if pv.version == current else 'no'}")
+
+
+@prompts_app.command("current")
+def prompts_current() -> None:
+    """Show currently active prompt version."""
+    from .prompts.registry import get_current_version, get_version
+    from .version import get_code_version
+
+    current = get_current_version()
+    try:
+        pv = get_version(current)
+        console.print(f"[bold]Active prompt:[/bold] {pv.version} — {pv.name}")
+        console.print(f"[bold]Scope:[/bold]         {pv.scope}")
+        console.print(f"[bold]SHA-256:[/bold]       {pv.sha256[:16]}..." if pv.sha256 else "")
+    except KeyError:
+        console.print(f"[yellow]Configured version '{current}' not found in manifest[/yellow]")
+
+    console.print(f"[bold]Code version:[/bold]  {get_code_version()}")
+
+
 def main() -> None:
+    from .cli_project import project_app
+    app.add_typer(project_app)
+    app.add_typer(prompts_app)
     app()
 
 

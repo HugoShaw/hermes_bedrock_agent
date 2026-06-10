@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _GLOBAL_TYPES = {"System", "Middleware", "Interface"}
 
 # Entity types scoped to sheet (workbook + sheet key)
-_SHEET_SCOPED_TYPES = {"Field", "FieldMapping", "FilterCondition"}
+_SHEET_SCOPED_TYPES = {"Field", "FieldMapping", "FilterCondition", "FieldDefinition", "EnumValue", "Parameter"}
 
 # Entity types scoped to workbook + sheet + parent function
 _STEP_TYPES = {
@@ -58,6 +58,34 @@ _TYPE_PREFIX: dict[str, str] = {
     "Annotation": "annotation",
     "ImplementationSpec": "impl_spec",
     "DataRetrievalCondition": "retrieval_cond",
+    "FieldDefinition": "fielddef",
+    "Parameter": "param",
+    "EnumValue": "enum",
+    "BusinessStep": "bstep",
+    "BusinessObject": "bobj",
+    "Script": "script",
+    "Requirement": "req",
+    "RecordType": "rectype",
+    "Issue": "issue",
+    "Constraint": "constraint",
+    "APIEndpoint": "endpoint",
+    "Condition": "condition",
+    "DefaultValueRule": "rule_default",
+    "InternalSystem": "internal_sys",
+    "IntegrationTool": "tool",
+    "ExternalSystem": "ext_system",
+    "ReviewTask": "review_task",
+    "Loop": "loop",
+    "StartEndNode": "startend",
+    "ResponsePayload": "resp_payload",
+    "RequestPayload": "req_payload",
+    "QueryCondition": "query_cond",
+    "BranchCondition": "branch_cond",
+    "CalculationRule": "rule_calc",
+    "LookupRule": "rule_lookup",
+    "FixedValueRule": "rule_fixed",
+    "Batch": "batch",
+    "Job": "job",
 }
 
 

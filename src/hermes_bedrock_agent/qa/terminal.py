@@ -170,10 +170,17 @@ def _print_chunks(chunks, verbose: bool = False) -> None:
         print()
 
 
-def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW) -> None:
+def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW, neptune_available: bool = True) -> None:
     print(_divider(title, "━", color))
-    if not gc or (not gc.nodes and not gc.edges):
-        print(_c("  (No graph context — Neptune not configured)", DIM))
+    if gc is None:
+        if not neptune_available:
+            print(_c("  (Neptune not available or not configured)", DIM))
+        else:
+            print(_c("  (No matching nodes found for this project)", DIM))
+        print()
+        return
+    if not gc.nodes and not gc.edges:
+        print(_c("  (No matching nodes found for this project)", DIM))
         print()
         return
     print(f"  {_c(f'Nodes: {len(gc.nodes)}', BYELLOW)}  {_c(f'Edges: {len(gc.edges)}', YELLOW)}")
@@ -191,10 +198,14 @@ def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW) -> None
     print()
 
 
-def _print_dual_graph(dual) -> None:
+def _print_dual_graph(dual, neptune_available: bool = True) -> None:
     """Print two-layer graph context."""
-    if dual is None or dual.is_empty:
-        _print_graph(None)
+    if dual is None:
+        _print_graph(None, neptune_available=neptune_available)
+        return
+    if dual.is_empty:
+        _print_graph(None, "Business Semantic Graph", BYELLOW, neptune_available=True)
+        _print_graph(None, "Implementation Graph", BCYAN, neptune_available=True)
         return
     _print_graph(dual.business, "Business Semantic Graph", BYELLOW)
     _print_graph(dual.implementation, "Implementation Graph", BCYAN)
@@ -366,8 +377,13 @@ def _run_answer(query: str, s: _Session) -> None:
     # Show graph context
     if dual_graph and not dual_graph.is_empty:
         _print_dual_graph(dual_graph)
+    elif dual_graph is not None:
+        # Neptune available but empty result for this project/query
+        _print_dual_graph(dual_graph, neptune_available=True)
     else:
-        _print_graph(None)
+        # dual_graph is None → Neptune unavailable or guidance_status == 'error'
+        neptune_ok = guidance_status != "error"
+        _print_dual_graph(None, neptune_available=neptune_ok)
 
     # Step 2: PDF/PNG evidence resolution from chunk metadata
     evidence_images: list = []
@@ -526,11 +542,13 @@ def _setup_readline() -> None:
         pass
 
 
-def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "") -> None:
+def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "", collection: Optional[str] = None) -> None:
     """Launch the interactive QA terminal."""
     from ..config import config
 
     model_id = config.vlm_model_id
+    if collection:
+        config.vector_collection = collection
     collection = config.vector_collection
 
     _setup_readline()

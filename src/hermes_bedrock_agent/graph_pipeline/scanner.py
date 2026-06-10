@@ -1,4 +1,4 @@
-"""Phase 0: Scan vlm_parsed directories for markdown files and classify them."""
+"""Phase 0: Scan vlm_parsed and parsed/ directories for markdown files and classify them."""
 
 from __future__ import annotations
 
@@ -11,6 +11,34 @@ from ._utils import normalize_id
 logger = logging.getLogger(__name__)
 
 
+def _parse_frontmatter(text: str) -> dict:
+    """Extract YAML frontmatter from markdown text."""
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end > 0:
+            try:
+                import yaml
+                return yaml.safe_load(text[4:end]) or {}
+            except Exception:
+                pass
+    return {}
+
+
+def _derive_workbook_name(md_file: Path) -> str:
+    """Determine workbook_name from directory structure."""
+    parent_name = md_file.parent.name
+    grandparent_name = md_file.parent.parent.name if md_file.parent.parent else ""
+
+    if parent_name == "vlm_parsed":
+        return grandparent_name
+    elif grandparent_name == "parsed":
+        return parent_name
+    elif grandparent_name == "excel":
+        return parent_name
+    else:
+        return parent_name
+
+
 def scan_markdown_files(project_id: str, project_name: str, input_dirs: list[str]) -> list[dict]:
     """Recursively find all .md files under input_dirs and build an inventory list."""
     inventory = []
@@ -20,11 +48,7 @@ def scan_markdown_files(project_id: str, project_name: str, input_dirs: list[str
             logger.warning("Input dir not found: %s", input_dir)
             continue
         for md_file in sorted(p.rglob("*.md")):
-            workbook_name = (
-                md_file.parent.parent.name
-                if md_file.parent.name == "vlm_parsed"
-                else md_file.parent.name
-            )
+            workbook_name = _derive_workbook_name(md_file)
             sheet_name = md_file.stem
 
             try:
@@ -34,6 +58,10 @@ def scan_markdown_files(project_id: str, project_name: str, input_dirs: list[str
                 logger.error("Failed to read %s: %s", md_file, exc)
                 content = ""
                 first_lines = ""
+
+            frontmatter = _parse_frontmatter(content)
+            if frontmatter.get("source_file"):
+                sheet_name = sheet_name or md_file.stem
 
             sheet_type = _classify_sheet_type(first_lines, sheet_name, content)
 
@@ -95,6 +123,10 @@ def scan_markdown_files(project_id: str, project_name: str, input_dirs: list[str
                 "content_length": len(content),
                 "read_status": "success" if content else "failed",
                 "notes": "",
+                "source_file": frontmatter.get("source_file", ""),
+                "source_type": frontmatter.get("source_type", ""),
+                "parser_type": frontmatter.get("parser_type", ""),
+                "document_role": frontmatter.get("document_role", ""),
             })
 
     return inventory

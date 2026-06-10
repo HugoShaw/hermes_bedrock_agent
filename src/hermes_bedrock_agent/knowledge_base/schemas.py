@@ -11,18 +11,29 @@ class Chunk(BaseModel):
     chunk_id: str
     content: str
     chunk_type: str  # overview|flowchart|mapping_table|data_condition|business_rule|api_spec|cross_sheet_summary
-    sheet_index: int
-    sheet_name: str
-    workbook_name: str
-    source_pdf_s3_path: str
-    source_excel_s3_path: str
-    source_markdown_s3_path: str
+    # --- Generic fields (always present) ---
+    source_file: str = ""
+    source_type: str = ""
+    parser_type: str = ""
+    document_role: str = ""
+    project_id: str = ""
+    content_hash: str = ""
+    source_markdown_file: str = ""
+    chunk_mode: str = ""
+    section_name: str = ""
+    # --- Excel-specific (optional, defaults to empty/zero) ---
+    sheet_index: int = 0
+    sheet_name: str = ""
+    workbook_name: str = ""
+    source_pdf_s3_path: str = ""
+    source_excel_s3_path: str = ""
+    source_markdown_s3_path: str = ""
     related_sheets: list[int] = Field(default_factory=list)
     systems: list[str] = Field(default_factory=list)
     apis: list[str] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
-    embedding_text: str
-    project_id: str = ""
+    field_codes: list[str] = Field(default_factory=list)
+    embedding_text: str = ""
 
 
 class EmbeddedChunk(Chunk):

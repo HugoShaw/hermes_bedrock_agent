@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,20 @@ from .schemas import Chunk
 logger = logging.getLogger(__name__)
 
 EMBEDDING_DIM = 1024
+
+_SAFE_PROJECT_ID_RE = re.compile(r'^[\w\-.　-鿿豈-﫿]+$')
+
+
+def _validate_project_id(project_id: str) -> str:
+    """Validate project_id contains only safe characters for LanceDB filters."""
+    if not project_id:
+        return ""
+    if not _SAFE_PROJECT_ID_RE.match(project_id):
+        raise ValueError(
+            f"Invalid project_id '{project_id}': must contain only "
+            "alphanumeric, underscore, hyphen, dot, or CJK characters"
+        )
+    return project_id
 
 
 def _get_bedrock_client(region: str):
@@ -39,6 +54,12 @@ def _lancedb_schema() -> pa.Schema:
         pa.field("text", pa.string()),
         pa.field("embedding", pa.list_(pa.float32(), EMBEDDING_DIM)),
         pa.field("chunk_type", pa.string()),
+        # Generic fields
+        pa.field("source_file", pa.string()),
+        pa.field("source_type", pa.string()),
+        pa.field("parser_type", pa.string()),
+        pa.field("document_role", pa.string()),
+        # Excel-specific (kept for backward compat)
         pa.field("sheet_index", pa.int32()),
         pa.field("sheet_name", pa.string()),
         pa.field("workbook_name", pa.string()),
@@ -58,6 +79,10 @@ def _chunk_to_row(chunk: Chunk, embedding: list[float]) -> dict:
         "text": chunk.content,
         "embedding": embedding,
         "chunk_type": chunk.chunk_type,
+        "source_file": chunk.source_file,
+        "source_type": chunk.source_type,
+        "parser_type": chunk.parser_type,
+        "document_role": chunk.document_role,
         "sheet_index": chunk.sheet_index,
         "sheet_name": chunk.sheet_name,
         "workbook_name": chunk.workbook_name,
@@ -111,9 +136,9 @@ def load_vector_store(
         table = db.open_table(coll_name)
         if project_id and replace_project:
             # Delete only rows belonging to this project, preserving other projects
-            safe_pid = project_id.replace("'", "\\'")
+            _validate_project_id(project_id)
             try:
-                table.delete(f"project_id = '{safe_pid}'")
+                table.delete(f"project_id = '{project_id}'")
                 logger.info("Deleted existing rows for project '%s' from '%s'", project_id, coll_name)
             except Exception as exc:
                 logger.warning("Could not delete project rows (may be old schema): %s", exc)
@@ -161,7 +186,7 @@ def query_vector_store(
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
     project_id: str = "",
-    where_filter: Optional[str] = None,
+    sheet_filter: Optional[list[int]] = None,
 ) -> list[dict]:
     """Query LanceDB with a text query; returns top-k results with metadata.
 
@@ -172,9 +197,8 @@ def query_vector_store(
         store_path: Optional LanceDB path override.
         collection: Optional collection name override.
         project_id: Project ID filter (scopes retrieval to one project).
-        where_filter: Optional additional SQL-like filter expression to apply
-            (e.g. "sheet_index IN (1, 2, 3)"). Combined with project_id filter
-            using AND when both are specified.
+        sheet_filter: Optional list of sheet indices to restrict results to.
+            Combined with project_id filter using AND when both are specified.
     """
     cfg = cfg or _default_config
     db_path = store_path or cfg.lancedb_path
@@ -194,13 +218,14 @@ def query_vector_store(
     table = db.open_table(coll_name)
     search = table.search(query_embedding)
 
-    # Build composite filter: project_id AND optional where_filter
     filters: list[str] = []
     if project_id:
-        safe_pid = project_id.replace("'", "\\'")
-        filters.append(f"project_id = '{safe_pid}'")
-    if where_filter:
-        filters.append(where_filter)
+        _validate_project_id(project_id)
+        filters.append(f"project_id = '{project_id}'")
+    if sheet_filter:
+        validated = [int(i) for i in sheet_filter]
+        idx_str = ", ".join(str(i) for i in validated)
+        filters.append(f"sheet_index IN ({idx_str})")
 
     if filters:
         search = search.where(" AND ".join(filters), prefilter=True)

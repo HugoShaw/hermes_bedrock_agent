@@ -1,4 +1,4 @@
-"""Graph pipeline public API — v3.1 semantic map extraction.
+"""Graph pipeline public API — v4.2 semantic map extraction.
 
 Usage (Python):
     from hermes_bedrock_agent.graph_pipeline import run_pipeline, GraphPipelineConfig
@@ -44,11 +44,27 @@ __all__ = ["run_pipeline", "GraphPipelineConfig", "PipelineResult"]
 
 
 def _resolve_input_dirs(project_dir: Path) -> list[str]:
-    """Find all vlm_parsed/ directories under project_dir."""
-    dirs = [str(d) for d in project_dir.rglob("vlm_parsed") if d.is_dir()]
+    """Find markdown directories under project_dir.
+
+    Supports both:
+    - New structure: parsed/docs/, parsed/csv/, parsed/images/, etc.
+    - Legacy structure: <workbook>/vlm_parsed/
+    """
+    dirs: list[str] = []
+
+    parsed_dir = project_dir / "parsed"
+    if parsed_dir.exists():
+        for subdir in sorted(parsed_dir.iterdir()):
+            if subdir.is_dir():
+                dirs.append(str(subdir))
+
+    for d in project_dir.rglob("vlm_parsed"):
+        if d.is_dir() and str(d) not in dirs:
+            dirs.append(str(d))
+
     if not dirs:
-        # Fallback: use project_dir itself
         dirs = [str(project_dir)]
+
     return dirs
 
 
@@ -79,13 +95,20 @@ def _as_pipeline_node(d: dict) -> PipelineNode:
         "sequence_no": str(d.get("sequence_no", "")),
         "properties_text": d.get("properties_text", ""),
         "aliases_text": d.get("aliases_text", ""),
+        "field_code": str(d.get("field_code", "")),
+        "field_no": str(d.get("field_no", "")),
+        "data_type": str(d.get("data_type", "")),
+        "length": str(d.get("length", "")),
+        "required": str(d.get("required", "")),
+        "condition_text": str(d.get("condition_text", "")),
+        "record_type": str(d.get("record_type", "")),
     }
     # clamp confidence
     safe["confidence"] = max(0.0, min(1.0, safe["confidence"]))
     # validate literals
     if safe["review_status"] not in ("verified", "pending", "rejected"):
         safe["review_status"] = "pending"
-    if safe["view_scope"] not in ("core", "detail", "evidence"):
+    if safe["view_scope"] not in ("core", "detail", "evidence", "candidate"):
         safe["view_scope"] = "core"
     return PipelineNode(**safe)
 
@@ -114,7 +137,7 @@ def _as_pipeline_edge(d: dict) -> PipelineEdge:
     safe["confidence"] = max(0.0, min(1.0, safe["confidence"]))
     if safe["review_status"] not in ("verified", "pending", "rejected"):
         safe["review_status"] = "pending"
-    if safe["view_scope"] not in ("core", "detail", "evidence"):
+    if safe["view_scope"] not in ("core", "detail", "evidence", "candidate"):
         safe["view_scope"] = "core"
     return PipelineEdge(**safe)
 
@@ -123,7 +146,7 @@ def run_pipeline(
     project_dir: str | Path,
     cfg: GraphPipelineConfig,
 ) -> PipelineResult:
-    """Run the complete v3.1 graph extraction and loading pipeline.
+    """Run the complete v4.2 graph extraction and loading pipeline.
 
     Phases:
       0. Scan markdown inventory
@@ -155,7 +178,7 @@ def run_pipeline(
         output_dir=str(output_dir),
     )
 
-    logger.info("═══ Semantic Map v3.1 Pipeline ═══")
+    logger.info("═══ Semantic Map v4.2 Pipeline ═══")
     logger.info("Project: %s (%s)", cfg.project_name or "(auto)", cfg.project_id or "(auto)")
     logger.info("Output dir: %s", output_dir)
 

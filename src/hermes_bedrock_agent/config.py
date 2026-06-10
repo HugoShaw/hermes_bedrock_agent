@@ -34,7 +34,9 @@ class Config:
             "/home/ubuntu/projects/data/vector_store/lancedb",
         )
     )
-    vector_collection: str = "murata_excel_vlm_dual_rag"
+    vector_collection: str = field(
+        default_factory=lambda: os.getenv("VECTOR_LOCAL_COLLECTION", "dual_rag_default")
+    )
 
     # ── Neptune ────────────────────────────────────────────────────────────────
     neptune_graph_id: str = field(
@@ -52,9 +54,16 @@ class Config:
     pdf_wide_threshold_mm: float = 1000.0
 
     # ── Chunking ───────────────────────────────────────────────────────────────
-    chunk_max_chars: int = 2000
-    chunk_min_chars: int = 100
-    embed_batch_size: int = 10
+    chunk_max_chars: int = field(default_factory=lambda: int(os.getenv("CHUNK_MAX_CHARS", "2000")))
+    chunk_min_chars: int = field(default_factory=lambda: int(os.getenv("CHUNK_MIN_CHARS", "100")))
+    chunk_mode: str = field(default_factory=lambda: os.getenv("CHUNK_MODE", "semantic"))
+    chunk_semantic_max_chars: int = field(
+        default_factory=lambda: int(os.getenv("CHUNK_SEMANTIC_MAX_CHARS", "4000"))
+    )
+    chunk_semantic_group_target: int = field(
+        default_factory=lambda: int(os.getenv("CHUNK_SEMANTIC_GROUP_TARGET", "2000"))
+    )
+    embed_batch_size: int = field(default_factory=lambda: int(os.getenv("EMBED_BATCH_SIZE", "10")))
 
     # ── LibreOffice ────────────────────────────────────────────────────────────
     libreoffice_port: int = 2002

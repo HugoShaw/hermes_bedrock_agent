@@ -21,7 +21,7 @@ class PipelineNode(BaseModel):
     evidence_text: str = ""
     confidence: float = Field(default=0.75, ge=0.0, le=1.0)
     review_status: Literal["verified", "pending", "rejected"] = "pending"
-    view_scope: Literal["core", "detail", "evidence"] = "core"
+    view_scope: Literal["core", "detail", "evidence", "candidate"] = "core"
     entity_type: str = "Unknown"
     layer: str = "project"
     category: str = ""
@@ -32,6 +32,14 @@ class PipelineNode(BaseModel):
     properties_text: str = ""
     aliases_text: str = ""
     sheet_type: str = ""
+    # v4.2 data-layer fields (extracted by LLM, stored on graph)
+    field_code: str = ""
+    field_no: str = ""
+    data_type: str = ""
+    length: str = ""
+    required: str = ""
+    condition_text: str = ""
+    record_type: str = ""
 
     def model_post_init(self, __context: Any) -> None:
         if not self.display_name:
@@ -49,7 +57,7 @@ class PipelineEdge(BaseModel):
     evidence_text: str = ""
     confidence: float = Field(default=0.75, ge=0.0, le=1.0)
     review_status: Literal["verified", "pending", "rejected"] = "pending"
-    view_scope: Literal["core", "detail", "evidence"] = "core"
+    view_scope: Literal["core", "detail", "evidence", "candidate"] = "core"
     link_method: str = "explicit_text"
     layer: str = "project"
     edge_label: str = ""

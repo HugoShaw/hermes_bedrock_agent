@@ -21,7 +21,11 @@ logger = logging.getLogger(__name__)
 
 def _get_paper_config(max_col: int, max_row: int) -> tuple[int, int, bool, int, int]:
     """Return (width_mm, height_mm, landscape, scale_x, scale_y)."""
-    if max_col <= 20 and max_row <= 50:
+    if max_col <= 8 and max_row <= 15:
+        return 297, 210, True, 1, 1
+    elif max_col <= 15 and max_row <= 30:
+        return 420, 297, True, 1, 1
+    elif max_col <= 20 and max_row <= 50:
         return 1190, 841, True, 1, 1
     elif max_col <= 20:
         return 594, 841, False, 1, 0

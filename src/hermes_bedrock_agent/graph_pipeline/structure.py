@@ -70,7 +70,7 @@ def build_structure_layer(
             "view_scope": "core",
         })
         edges.append({
-            "id": f"rel:{project_id}:struct_{normalize_id(wb_name)[:20]}_proj",
+            "id": f"rel:{project_id}:struct_{normalize_id(wb_name)}_proj",
             "start_id": proj_node_id,
             "end_id": wb_id,
             "type": "HAS_WORKBOOK",

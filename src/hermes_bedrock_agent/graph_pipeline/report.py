@@ -139,6 +139,49 @@ def generate_extraction_report(
 3. Add more cross-sheet linking for shared systems/APIs
 4. Extract row-level field mappings for large mapping sheets
 5. Verify FunctionModules without internal steps have ReviewTasks
+
+## 12. Verification Queries (Graph Explorer)
+
+### Node count by entity type
+```cypher
+MATCH (n) WHERE n.project_id = '{project_id}'
+RETURN labels(n) AS entity_type, count(n) AS cnt
+ORDER BY cnt DESC
+```
+
+### Edge count by relationship type
+```cypher
+MATCH (a)-[r]->(b) WHERE a.project_id = '{project_id}'
+RETURN type(r) AS relationship, count(r) AS cnt
+ORDER BY cnt DESC
+```
+
+### Orphan nodes (no edges)
+```cypher
+MATCH (n) WHERE n.project_id = '{project_id}'
+AND NOT (n)--()
+RETURN n.id, labels(n), n.name
+LIMIT 20
+```
+
+### Cross-sheet links
+```cypher
+MATCH (a)-[r]->(b)
+WHERE a.project_id = '{project_id}'
+AND a.source_file <> b.source_file
+RETURN type(r) AS rel, count(r) AS cnt
+ORDER BY cnt DESC
+```
+
+### Low confidence edges (review candidates)
+```cypher
+MATCH (a)-[r]->(b)
+WHERE a.project_id = '{project_id}'
+AND r.confidence < 0.70
+RETURN r.type, r.confidence, r.link_method, a.name, b.name
+ORDER BY r.confidence ASC
+LIMIT 30
+```
 """
 
 

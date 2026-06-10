@@ -7,14 +7,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 _DISPLAY_TYPES = {
-    "Project", "System", "Middleware", "Interface", "BusinessProcess",
-    "FunctionModule", "DecisionPoint", "APIOperation", "APICallSequence",
+    # Project structure
+    "Project", "Workbook",
+    # System / Interface
+    "System", "ExternalSystem", "InternalSystem", "Middleware", "IntegrationTool",
+    "Interface", "APIOperation", "APICallSequence", "APIEndpoint",
+    # Business / Process
+    "BusinessProcess", "BusinessObject", "BusinessStep", "FunctionModule",
+    "FlowNode", "DecisionPoint", "BranchCondition",
+    # Data / Fields
+    "DataEntity", "RecordType", "Field", "FieldDefinition",
+    "Parameter", "EnumValue", "StatusValue",
+    # Mapping / Rules
     "MappingDefinition", "BusinessRule", "TransformationRule", "ConversionRule",
-    "DataEntity", "FlowNode", "BranchCondition", "StatusValue",
-    "FileObject", "ScriptStep", "FileOperation", "APICallStep",
-    "ImplementationSpec", "DataRetrievalCondition", "FilterCondition",
-    "ResultReturn", "ErrorHandlingStep",
-    "Workbook",  # kept for navigation
+    "DefaultValueRule", "FixedValueRule", "LookupRule", "CalculationRule",
+    "FilterCondition", "DataRetrievalCondition", "Constraint",
+    # Implementation
+    "ImplementationSpec", "Script", "ScriptStep", "FileObject", "FileOperation",
+    "APICallStep", "ResultReturn", "ErrorHandlingStep",
+    # Review
+    "Issue", "ReviewTask", "Requirement",
 }
 
 

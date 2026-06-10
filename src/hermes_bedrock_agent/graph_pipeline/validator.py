@@ -103,6 +103,16 @@ def run_preflight_check(
                 f"Many pending edges in display graph: {pending_display}/{len(display_edges)}"
             )
 
+    # v4.2: Core entity type coverage check
+    type_counts = Counter(n.get("entity_type", "Unknown") for n in nodes)
+    for core_type in ("BusinessProcess", "DataEntity"):
+        if type_counts.get(core_type, 0) == 0:
+            issues_p2.append(f"Core entity type '{core_type}' has zero instances — extraction may be incomplete")
+    if type_counts.get("System", 0) == 0 and type_counts.get("ExternalSystem", 0) == 0:
+        issues_p2.append("Core entity type 'System/ExternalSystem' has zero instances — extraction may be incomplete")
+    if type_counts.get("BusinessRule", 0) == 0:
+        issues_p2.append("Core entity type 'BusinessRule' has zero instances — extraction may be incomplete")
+
     has_p0 = len(issues_p0) > 0
 
     report = f"""# Semantic Map Preflight Check
@@ -181,10 +191,12 @@ def post_load_verify(client: object, project_id: str, expected_nodes: int, expec
     for attempt in range(2):
         try:
             node_result = client.execute_query(
-                f"MATCH (n) WHERE n.project_id = '{project_id}' RETURN count(n) AS cnt"
+                "MATCH (n) WHERE n.project_id = $project_id RETURN count(n) AS cnt",
+                parameters={"project_id": project_id},
             )
             edge_result = client.execute_query(
-                f"MATCH (a)-[r]->(b) WHERE a.project_id = '{project_id}' RETURN count(r) AS cnt"
+                "MATCH (a)-[r]->(b) WHERE a.project_id = $project_id RETURN count(r) AS cnt",
+                parameters={"project_id": project_id},
             )
             actual_nodes = _extract_cnt(node_result)
             actual_edges = _extract_cnt(edge_result)

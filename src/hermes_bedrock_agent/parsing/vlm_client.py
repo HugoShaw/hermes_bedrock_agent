@@ -40,18 +40,26 @@ def classify_sheet_type(sheet_name: str) -> str:
     return "generic"
 
 
-def _base_context(sheet_name: str, tile_context: str = "") -> str:
+def _base_context(sheet_name: str, tile_context: str = "", workbook_name: str = "") -> str:
+    """Build a generic base context for VLM prompts.
+
+    Does NOT hardcode any project-specific system names (SAP, ANDPAD, DataSpider, etc.)
+    to avoid cross-project hallucination contamination.
+    """
+    wb_hint = f" from workbook \"{workbook_name}\"" if workbook_name else ""
     return (
-        "You are analyzing a sheet from a Japanese enterprise IF (Interface) Mapping Definition Document "
-        "(IFマッピング定義書). This workbook defines the data mapping between SAP S4/HANA and ANDPAD "
-        "(construction project management) via DataSpider middleware.\n\n"
+        "You are analyzing a sheet from a Japanese enterprise document"
+        f"{wb_hint}. "
+        "Extract the content exactly as shown in the image. "
+        "Do NOT assume or hallucinate system names, company names, or integration details "
+        "that are not visible in the image.\n\n"
         f"Current sheet: {sheet_name}\n"
         f"{tile_context}\n"
     )
 
 
-def build_prompt(sheet_type: str, sheet_name: str, tile_context: str = "") -> str:
-    base = _base_context(sheet_name, tile_context)
+def build_prompt(sheet_type: str, sheet_name: str, tile_context: str = "", workbook_name: str = "") -> str:
+    base = _base_context(sheet_name, tile_context, workbook_name=workbook_name)
 
     if sheet_type == "change_history":
         return base + """
@@ -84,11 +92,11 @@ Output everything in structured markdown. Preserve Japanese text exactly."""
 
     if sheet_type == "dev_spec":
         return base + """
-This sheet contains DataSpider development specifications.
+This sheet contains development specifications for a data integration interface.
 
 Please extract:
 1. **Processing overview** (処理概要): How this interface works
-2. **System flow**: SAP → DataSpider → ANDPAD data flow
+2. **System flow**: The data flow between source and target systems (as shown in the image)
 3. **Processing steps**: Numbered steps describing the implementation
 4. **File formats**: Input/output file specifications
 5. **Error handling**: Exception processing rules
@@ -174,8 +182,8 @@ Output the synthesized result in this structure:
 """
 
 
-def _parse_single(client, model_id: str, img_path: str, sheet_type: str, sheet_name: str) -> tuple[str, dict]:
-    prompt = build_prompt(sheet_type, sheet_name)
+def _parse_single(client, model_id: str, img_path: str, sheet_type: str, sheet_name: str, workbook_name: str = "") -> tuple[str, dict]:
+    prompt = build_prompt(sheet_type, sheet_name, workbook_name=workbook_name)
     img_bytes, media_type = load_for_vlm(img_path, max_dim=7900)
     return converse_multimodal(client, model_id, [(img_bytes, media_type)], prompt, max_tokens=12000)
 
@@ -188,6 +196,7 @@ def _parse_tiled(
     sheet_name: str,
     tile_save_dir: Optional[str] = None,
     delay: float = 2.0,
+    workbook_name: str = "",
 ) -> tuple[str, dict]:
     tile_results: list[dict] = []
     total_usage: dict = {"inputTokens": 0, "outputTokens": 0}
@@ -215,7 +224,7 @@ def _parse_tiled(
         elif sheet_type == "flowchart":
             tile_context += f"\nThis is vertical section {row + 1} of the flowchart."
 
-        prompt = build_prompt(sheet_type, sheet_name, tile_context)
+        prompt = build_prompt(sheet_type, sheet_name, tile_context, workbook_name=workbook_name)
         img_bytes, media_type = load_for_vlm(tile_path, max_dim=4000)
 
         try:
@@ -253,11 +262,97 @@ def _parse_tiled(
     return synth_text, total_usage
 
 
+def _page_synthesis_prompt(sheet_name: str, sheet_type: str, page_results: list[dict]) -> str:
+    pages_text = "\n\n---\n\n".join(
+        f"### Page {p['page_num']} of {p['total_pages']}:\n{p['content']}"
+        for p in page_results
+    )
+    n = len(page_results)
+    return f"""You previously analyzed {n} pages from the sheet "{sheet_name}" (type: {sheet_type}).
+Each page is a continuation of the same sheet content (the sheet was too large to fit on one PDF page).
+Here are all page analyses:
+
+{pages_text}
+
+---
+
+Now please synthesize all page analyses into ONE coherent, complete sheet-level analysis.
+
+Requirements:
+1. Pages are sequential — page 1 contains the top rows, page 2 continues where page 1 ended, etc.
+2. Reconstruct complete tables by appending rows from later pages to the table started on page 1
+3. The table headers typically only appear on page 1 — do NOT duplicate them
+4. Remove any repeated header rows that may appear at the top of subsequent pages
+5. Maintain correct row ordering
+6. Note any gaps or unclear transitions between pages
+
+Output the final unified result in structured markdown."""
+
+
+def _parse_multi_page(
+    client,
+    model_id: str,
+    page_image_paths: list[str],
+    sheet_type: str,
+    sheet_name: str,
+    delay: float = 3.0,
+    workbook_name: str = "",
+) -> tuple[str, dict]:
+    """Parse each page of a multi-page sheet PDF separately, then merge results."""
+    page_results: list[dict] = []
+    total_usage: dict = {"inputTokens": 0, "outputTokens": 0}
+    total_pages = len(page_image_paths)
+
+    for i, page_path in enumerate(page_image_paths):
+        page_num = i + 1
+        page_context = (
+            f"\nThis is page {page_num} of {total_pages} from a multi-page sheet. "
+        )
+        if page_num == 1:
+            page_context += "This page contains the beginning of the sheet (headers and first rows)."
+        else:
+            page_context += "This page continues from the previous page (may start mid-table)."
+
+        prompt = build_prompt(sheet_type, sheet_name, page_context, workbook_name=workbook_name)
+        img_bytes, media_type = load_for_vlm(page_path, max_dim=7900)
+
+        try:
+            result, usage = converse_multimodal(client, model_id, [(img_bytes, media_type)], prompt, max_tokens=12000)
+            total_usage["inputTokens"] += usage.get("inputTokens", 0)
+            total_usage["outputTokens"] += usage.get("outputTokens", 0)
+            page_results.append({"page_num": page_num, "total_pages": total_pages, "content": result})
+            logger.info("      Page %d/%d: %d chars", page_num, total_pages, len(result))
+        except Exception as e:
+            logger.error("      Page %d/%d ERROR: %s", page_num, total_pages, e)
+            page_results.append({"page_num": page_num, "total_pages": total_pages, "content": f"[ERROR: {e}]"})
+            time.sleep(5)
+            continue
+
+        if i < total_pages - 1:
+            time.sleep(delay)
+
+    if len(page_results) > 1:
+        logger.info("      Synthesizing %d pages…", len(page_results))
+        synth_prompt = _page_synthesis_prompt(sheet_name, sheet_type, page_results)
+        try:
+            synth_text, synth_usage = converse_text(client, model_id, synth_prompt, max_tokens=12000)
+            total_usage["inputTokens"] += synth_usage.get("inputTokens", 0)
+            total_usage["outputTokens"] += synth_usage.get("outputTokens", 0)
+        except Exception as e:
+            logger.error("      Page synthesis ERROR: %s", e)
+            synth_text = "\n\n---\n\n".join(p["content"] for p in page_results)
+    else:
+        synth_text = page_results[0]["content"] if page_results else "[No content]"
+
+    return synth_text, total_usage
+
+
 def parse_sheet(
     images: SheetImages,
     output_dir: str,
     cfg: Optional[Config] = None,
     client=None,
+    workbook_name: str = "",
 ) -> ParseResult:
     """Run VLM parsing for one sheet. Never call this in parallel — Bedrock will time out."""
     cfg = cfg or _default_config
@@ -269,21 +364,33 @@ def parse_sheet(
     sheet_type = classify_sheet_type(sheet_name)
     safe_name = f"sheet_{images.sheet_info.index:02d}"
     has_tiles = bool(images.tile_paths)
+    is_multi_page = images.page_count > 1 and len(images.page_image_paths) > 1
 
-    logger.info("  [%s] %s (type=%s, tiles=%s)", safe_name, sheet_name, sheet_type, has_tiles)
+    logger.info("  [%s] %s (type=%s, tiles=%s, pages=%d, strategy=%s)",
+                safe_name, sheet_name, sheet_type, has_tiles,
+                images.page_count, images.rendering_strategy)
 
-    if has_tiles and sheet_type in ("mapping", "flowchart", "dev_spec"):
+    if is_multi_page:
+        markdown, usage = _parse_multi_page(
+            client, cfg.vlm_model_id,
+            images.page_image_paths, sheet_type, sheet_name,
+            delay=cfg.vlm_delay_seconds,
+            workbook_name=workbook_name,
+        )
+    elif has_tiles and sheet_type in ("mapping", "flowchart", "dev_spec"):
         tile_save_dir = os.path.join(output_dir, f"{safe_name}_tiles")
         markdown, usage = _parse_tiled(
             client, cfg.vlm_model_id,
             images.tile_paths, sheet_type, sheet_name,
             tile_save_dir=tile_save_dir, delay=2.0,
+            workbook_name=workbook_name,
         )
     else:
         markdown, usage = _parse_single(
             client, cfg.vlm_model_id,
             images.vlm_ready_path or images.full_image_path,
             sheet_type, sheet_name,
+            workbook_name=workbook_name,
         )
 
     md_path = os.path.join(output_dir, f"{safe_name}.md")
@@ -295,6 +402,8 @@ def parse_sheet(
         "sheet_name": sheet_name,
         "sheet_type": sheet_type,
         "has_tiles": has_tiles,
+        "page_count": images.page_count,
+        "rendering_strategy": images.rendering_strategy,
         "usage": usage,
         "output_length": len(markdown),
     }
@@ -312,6 +421,7 @@ def parse_all_sheets(
     output_dir: str,
     cfg: Optional[Config] = None,
     resume: bool = True,
+    workbook_name: str = "",
 ) -> list[ParseResult]:
     """Parse every sheet sequentially. resume=True skips sheets with existing .md > 200 bytes."""
     cfg = cfg or _default_config
@@ -339,7 +449,7 @@ def parse_all_sheets(
             continue
 
         try:
-            result = parse_sheet(images, output_dir=output_dir, cfg=cfg, client=client)
+            result = parse_sheet(images, output_dir=output_dir, cfg=cfg, client=client, workbook_name=workbook_name)
             results.append(result)
         except Exception as e:
             logger.error("  Sheet %d FAILED: %s", images.sheet_info.index, e)

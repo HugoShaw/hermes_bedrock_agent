@@ -1,4 +1,4 @@
-"""Configuration for the graph pipeline."""
+"""Configuration for the graph pipeline (v4.2 Semantic Map)."""
 
 from __future__ import annotations
 

@@ -126,27 +126,25 @@ def _build_project_filter(project_id: str) -> tuple[str, str]:
       - project_id (e.g. 'sample_20260519')
       - project_name (e.g. 'サンプル20260519')
     We match on both to handle the mapping.
+
+    Returns parameterized filter clauses using $pid parameter.
+    Caller must include {"pid": project_id} in the parameters dict.
     """
     if not project_id:
         return "", ""
-    pid_esc = project_id.replace("'", "''")
-    # Match on project_id OR project_name (covers both naming conventions)
-    filter_clause = (
-        f" AND (n.project_id = '{pid_esc}' OR n.project_name = '{pid_esc}')"
-    )
-    filter_clause_s = (
-        f" AND (s.project_id = '{pid_esc}' OR s.project_name = '{pid_esc}')"
-    )
+    filter_clause = " AND (n.project_id = $pid OR n.project_name = $pid)"
+    filter_clause_s = " AND (s.project_id = $pid OR s.project_name = $pid)"
     return filter_clause, filter_clause_s
 
 
 def _evaluate_hint_quality(
     hints: GraphGuidanceHints,
-    total_sheets: int = 27,
+    total_sheets: Optional[int] = None,
 ) -> str:
     """Evaluate graph guidance quality: 'strong', 'weak', or 'none'.
 
-    Strong: hints return a focused sheet set (< 50% of total, and <= _MAX_HINT_SHEETS)
+    Strong: hints return a focused sheet set (<= _MAX_HINT_SHEETS and, if
+        total_sheets is known, < 50% of total)
     Weak: hints exist but cover too many sheets (over-expansion)
     None: no graph hints found at all
     """
@@ -159,8 +157,8 @@ def _evaluate_hint_quality(
     if n_sheets > _MAX_HINT_SHEETS:
         return "weak"
 
-    # Check fraction threshold
-    if total_sheets > 0 and n_sheets / total_sheets > _MAX_SHEET_FRACTION:
+    # Check fraction threshold only when total_sheets is known
+    if total_sheets and total_sheets > 0 and n_sheets / total_sheets > _MAX_SHEET_FRACTION:
         return "weak"
 
     return "strong"
@@ -208,14 +206,20 @@ def explore_graph_for_query(query: str, project_id: str = "") -> GraphGuidanceHi
 
     found_node_ids: list[str] = []
 
-    # Step A+B: Find nodes matching query terms (no project filter on initial search
-    # because many nodes in new graph have no project_id)
+    # Step A+B: Find nodes matching query terms (project_id filter when available;
+    # without filter for production graphs where many nodes lack project_id)
     for name in query_terms[:8]:
-        safe = name.replace("'", "''")
         try:
+            exp_query = (
+                "MATCH (n) WHERE toLower(n.name) CONTAINS toLower($search_name) "
+            )
+            exp_params = {"search_name": name}
+            if project_id:
+                exp_query += "AND (n.project_id = $pid OR n.project_name = $pid) "
+                exp_params["pid"] = project_id
+            exp_query += "RETURN n LIMIT 10"
             rows = client.execute_query(
-                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}') "
-                f"RETURN n LIMIT 10"
+                exp_query, parameters=exp_params,
             ).get("results", [])
             for row in rows:
                 nd = _node_from_row(row.get("n", {}))
@@ -229,19 +233,18 @@ def explore_graph_for_query(query: str, project_id: str = "") -> GraphGuidanceHi
         return hints
 
     # Deduplicate node ids for the IN clause
-    unique_ids = list(dict.fromkeys(found_node_ids))
-    ids_str = ", ".join(f"'{nid}'" for nid in unique_ids[:20])
+    unique_ids = list(dict.fromkeys(found_node_ids))[:20]
 
     # Step C: Expand to connected Sheet nodes → sheet_indices
     # New graph: Sheet.sheet_name = 'sheet_05' (extract index from this)
     try:
         rows = client.execute_query(
-            f"MATCH (n)-[r]-(s:Sheet) WHERE id(n) IN [{ids_str}] "
-            f"RETURN DISTINCT s.sheet_name AS sheet_name, s.name AS name, "
-            f"s.project_name AS pname, s.project_id AS pid LIMIT 30"
+            "MATCH (n)-[r]-(s:Sheet) WHERE id(n) IN $node_ids "
+            "RETURN DISTINCT s.sheet_name AS sheet_name, s.name AS name, "
+            "s.project_name AS pname, s.project_id AS pid LIMIT 30",
+            parameters={"node_ids": unique_ids},
         ).get("results", [])
         for row in rows:
-            # Filter by project if specified
             if project_id:
                 rpid = row.get("pid") or ""
                 rpname = row.get("pname") or ""
@@ -257,9 +260,10 @@ def explore_graph_for_query(query: str, project_id: str = "") -> GraphGuidanceHi
     if not hints.relevant_sheet_indices:
         try:
             rows = client.execute_query(
-                f"MATCH (n)-[*1..2]-(s:Sheet) WHERE id(n) IN [{ids_str}] "
-                f"RETURN DISTINCT s.sheet_name AS sheet_name, s.name AS name, "
-                f"s.project_name AS pname, s.project_id AS pid LIMIT 30"
+                "MATCH (n)-[*1..2]-(s:Sheet) WHERE id(n) IN $node_ids "
+                "RETURN DISTINCT s.sheet_name AS sheet_name, s.name AS name, "
+                "s.project_name AS pname, s.project_id AS pid LIMIT 30",
+                parameters={"node_ids": unique_ids},
             ).get("results", [])
             for row in rows:
                 if project_id:
@@ -275,10 +279,17 @@ def explore_graph_for_query(query: str, project_id: str = "") -> GraphGuidanceHi
 
     # Step D: Find connected System nodes → system names
     try:
+        sys_exp_query = (
+            "MATCH (n)-[r]-(sys) WHERE id(n) IN $node_ids "
+            "AND 'System' IN labels(sys) "
+        )
+        sys_exp_params = {"node_ids": unique_ids}
+        if project_id:
+            sys_exp_query += "AND (sys.project_id = $pid OR sys.project_name = $pid) "
+            sys_exp_params["pid"] = project_id
+        sys_exp_query += "RETURN DISTINCT sys.name AS system_name LIMIT 10"
         rows = client.execute_query(
-            f"MATCH (n)-[r]-(sys) WHERE id(n) IN [{ids_str}] "
-            f"AND 'System' IN labels(sys) "
-            f"RETURN DISTINCT sys.name AS system_name LIMIT 10"
+            sys_exp_query, parameters=sys_exp_params,
         ).get("results", [])
         for row in rows:
             sname = row.get("system_name")
@@ -294,7 +305,8 @@ def explore_graph_for_query(query: str, project_id: str = "") -> GraphGuidanceHi
             hints.relevant_systems.append(name)
 
     # Step F: Evaluate hint quality
-    hints.quality = _evaluate_hint_quality(hints)
+    estimated_total = max(hints.relevant_sheet_indices) if hints.relevant_sheet_indices else None
+    hints.quality = _evaluate_hint_quality(hints, total_sheets=estimated_total)
 
     logger.info(
         "Graph exploration hints: sheets=%s systems=%s chunk_types=%s entities=%s quality=%s",
@@ -354,34 +366,24 @@ def _build_dual_graph_from_hints(
             seen_i.add((f, t, rel))
             impl_edges.append({"from": f, "to": t, "relationship": rel})
 
-    # Build sheet_name filter list: ['sheet_05', 'sheet_08', ...]
-    sheet_names = [f"'sheet_{str(i).zfill(2)}'" for i in hints.relevant_sheet_indices[:10]]
-    sn_list = ", ".join(sheet_names)
-
-    # Build project filter for Sheet-based queries
-    # Sheet nodes use project_name (not project_id), so match on both
-    pid_esc = project_id.replace("'", "''") if project_id else ""
-    sheet_project_filter = ""
-    if pid_esc:
-        sheet_project_filter = (
-            f" AND (s.project_name = '{pid_esc}' OR s.project_id = '{pid_esc}')"
-        )
+    # Build sheet_name filter list
+    sheet_name_list = [f"sheet_{str(i).zfill(2)}" for i in hints.relevant_sheet_indices[:10]]
 
     # Business: System-level relationships (SENDS_TO, USES_SYSTEM, SYSTEM_HAS_INTERFACE)
-    # Note: System nodes are project-specific in this graph, so filter by project
     try:
-        sys_pf = ""
-        if pid_esc:
-            sys_pf = (
-                f" AND (a.project_name = '{pid_esc}' OR a.project_id = '{pid_esc}'"
-                f" OR b.project_name = '{pid_esc}' OR b.project_id = '{pid_esc}')"
-            )
-        rows = client.execute_query(
+        sys_query = (
             "MATCH (a)-[r]-(b) "
             "WHERE 'System' IN labels(a) AND 'System' IN labels(b)"
-            f"{sys_pf} "
-            "RETURN a, type(r) AS rel, b LIMIT 30"
-        ).get("results", [])
+        )
+        sys_params: dict = {}
+        if project_id:
+            sys_query += (
+                " AND (a.project_name = $pid OR a.project_id = $pid"
+                " OR b.project_name = $pid OR b.project_id = $pid)"
+            )
+            sys_params["pid"] = project_id
+        sys_query += " RETURN a, type(r) AS rel, b LIMIT 30"
+        rows = client.execute_query(sys_query, parameters=sys_params or None).get("results", [])
         for row in rows:
             a_nd = _node_from_row(row.get("a", {}))
             b_nd = _node_from_row(row.get("b", {}))
@@ -393,15 +395,21 @@ def _build_dual_graph_from_hints(
         logger.debug("Graph context system-system query failed: %s", exc)
 
     # Business: sheet neighbourhood for discovered sheets
-    if sheet_names:
+    if sheet_name_list:
         try:
-            rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_name IN [{sn_list}]"
-                f"{sheet_project_filter} "
-                f"AND ('System' IN labels(n) OR 'Sheet' IN labels(n) OR "
-                f"'BusinessProcess' IN labels(n) OR 'DataEntity' IN labels(n)) "
-                f"RETURN s, type(r) AS rel, n LIMIT 50"
-            ).get("results", [])
+            bus_sheet_query = (
+                "MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_name IN $sheet_names"
+            )
+            bus_sheet_params: dict = {"sheet_names": sheet_name_list}
+            if project_id:
+                bus_sheet_query += " AND (s.project_name = $pid OR s.project_id = $pid)"
+                bus_sheet_params["pid"] = project_id
+            bus_sheet_query += (
+                " AND ('System' IN labels(n) OR 'Sheet' IN labels(n) OR "
+                "'BusinessProcess' IN labels(n) OR 'DataEntity' IN labels(n)) "
+                "RETURN s, type(r) AS rel, n LIMIT 50"
+            )
+            rows = client.execute_query(bus_sheet_query, parameters=bus_sheet_params).get("results", [])
             for row in rows:
                 s_nd = _node_from_row(row.get("s", {}))
                 n_nd = _node_from_row(row.get("n", {}))
@@ -413,19 +421,25 @@ def _build_dual_graph_from_hints(
             logger.debug("Graph context sheet neighbourhood failed: %s", exc)
 
     # Implementation: sheet → implementation details (API, Field, MappingRule, etc.)
-    if sheet_names:
+    if sheet_name_list:
         try:
-            rows = client.execute_query(
-                f"MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_name IN [{sn_list}]"
-                f"{sheet_project_filter} "
-                f"AND ('Interface' IN labels(n) OR 'Field' IN labels(n) OR "
-                f"'MappingDefinition' IN labels(n) OR 'BusinessRule' IN labels(n) OR "
-                f"'TransformationRule' IN labels(n) OR 'APIOperation' IN labels(n) OR "
-                f"'MappingRule' IN labels(n) OR 'SourceTable' IN labels(n) OR "
-                f"'TargetTable' IN labels(n) OR 'SourceField' IN labels(n) OR "
-                f"'TargetField' IN labels(n)) "
-                f"RETURN s, type(r) AS rel, n LIMIT 60"
-            ).get("results", [])
+            impl_sheet_query = (
+                "MATCH (s:Sheet)-[r]-(n) WHERE s.sheet_name IN $sheet_names"
+            )
+            impl_sheet_params: dict = {"sheet_names": sheet_name_list}
+            if project_id:
+                impl_sheet_query += " AND (s.project_name = $pid OR s.project_id = $pid)"
+                impl_sheet_params["pid"] = project_id
+            impl_sheet_query += (
+                " AND ('Interface' IN labels(n) OR 'Field' IN labels(n) OR "
+                "'MappingDefinition' IN labels(n) OR 'BusinessRule' IN labels(n) OR "
+                "'TransformationRule' IN labels(n) OR 'APIOperation' IN labels(n) OR "
+                "'MappingRule' IN labels(n) OR 'SourceTable' IN labels(n) OR "
+                "'TargetTable' IN labels(n) OR 'SourceField' IN labels(n) OR "
+                "'TargetField' IN labels(n)) "
+                "RETURN s, type(r) AS rel, n LIMIT 60"
+            )
+            rows = client.execute_query(impl_sheet_query, parameters=impl_sheet_params).get("results", [])
             for row in rows:
                 s_nd = _node_from_row(row.get("s", {}))
                 n_nd = _node_from_row(row.get("n", {}))
@@ -436,18 +450,24 @@ def _build_dual_graph_from_hints(
         except Exception as exc:
             logger.debug("Graph context implementation sheet query failed: %s", exc)
 
-    # Implementation: entity-name search for detailed nodes
+    # Implementation: entity-name search for detailed nodes (with project_id filter)
     for name in hints.query_entities[:5]:
-        safe = name.replace("'", "''")
         try:
-            rows = client.execute_query(
-                f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower('{safe}') "
-                f"AND ('Interface' IN labels(n) OR 'Field' IN labels(n) OR "
-                f"'MappingDefinition' IN labels(n) OR 'BusinessRule' IN labels(n) OR "
-                f"'APIOperation' IN labels(n) OR 'TransformationRule' IN labels(n)) "
-                f"WITH n LIMIT 5 MATCH (n)-[r]-(m) "
-                f"RETURN n, type(r) AS rel, m LIMIT 20"
-            ).get("results", [])
+            impl_ent_query = (
+                "MATCH (n) WHERE toLower(n.name) CONTAINS toLower($search_name) "
+                "AND ('Interface' IN labels(n) OR 'Field' IN labels(n) OR "
+                "'MappingDefinition' IN labels(n) OR 'BusinessRule' IN labels(n) OR "
+                "'APIOperation' IN labels(n) OR 'TransformationRule' IN labels(n))"
+            )
+            impl_ent_params: dict = {"search_name": name}
+            if project_id:
+                impl_ent_query += " AND n.project_id = $pid"
+                impl_ent_params["pid"] = project_id
+            impl_ent_query += " WITH n LIMIT 5 MATCH (n)-[r]-(m)"
+            if project_id:
+                impl_ent_query += " WHERE m.project_id = $pid"
+            impl_ent_query += " RETURN n, type(r) AS rel, m LIMIT 20"
+            rows = client.execute_query(impl_ent_query, parameters=impl_ent_params).get("results", [])
             for row in rows:
                 n_nd = _node_from_row(row.get("n", {}))
                 m_nd = _node_from_row(row.get("m", {}))
@@ -595,15 +615,13 @@ def retrieve_with_graph_guidance(
             "Graph-guided retrieval: STRONG hints — sheets=%s systems=%s",
             hints.relevant_sheet_indices, hints.relevant_systems,
         )
-        idx_list = ", ".join(str(i) for i in hints.relevant_sheet_indices)
-        sheet_filter = f"sheet_index IN ({idx_list})"
         try:
             filtered_raw = query_vector_store(
                 query_text=query,
                 cfg=cfg,
                 top_k=top_k,
                 project_id=project_id,
-                where_filter=sheet_filter,
+                sheet_filter=hints.relevant_sheet_indices,
             )
             guided_chunks = _rows_to_retrieved_chunks(filtered_raw, project_id)
         except Exception as exc:
@@ -647,8 +665,13 @@ def retrieve_with_graph_guidance(
         except Exception as exc:
             logger.debug("Graph context build from hints failed: %s", exc)
 
-    if dual_graph is None:
+    if dual_graph is None or dual_graph.is_empty:
         dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=project_id)
+    elif dual_graph.business.nodes == [] and dual_graph.business.edges == []:
+        # Business layer empty but implementation has data — try to fill business from fallback
+        fallback = fetch_dual_graph_context(chunks, query=query, project_id=project_id)
+        if fallback and fallback.business.nodes:
+            dual_graph.business = fallback.business
 
     return chunks[:top_k], dual_graph, guidance_status
 
