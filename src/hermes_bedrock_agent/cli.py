@@ -333,6 +333,14 @@ def qa(
     mode: str = typer.Option("answer", "--mode", "-m", help="Mode: retrieve|answer|graph"),
     top_k: int = typer.Option(5, "--top-k", "-k", help="Number of chunks to retrieve"),
     no_graph: bool = typer.Option(False, "--no-graph", help="Skip Neptune graph context"),
+    debug_retrieval: bool = typer.Option(False, "--debug-retrieval", "-d", help="Show full retrieval trace"),
+    show_vector_trace: bool = typer.Option(False, "--show-vector-trace", help="Show vector retrieval details"),
+    show_graph_trace: bool = typer.Option(False, "--show-graph-trace", help="Show graph retrieval details"),
+    show_context: bool = typer.Option(False, "--show-context", help="Show assembled context before LLM call"),
+    strict_project_isolation: bool = typer.Option(False, "--strict-project-isolation", help="Error on cross-project data"),
+    graph_confidence_threshold: float = typer.Option(0.0, "--graph-confidence-threshold", help="Filter graph edges below confidence"),
+    disable_keyword_boost: bool = typer.Option(False, "--disable-keyword-boost", help="Disable keyword score boosting"),
+    vector_only: bool = typer.Option(False, "--vector-only", help="Skip graph retrieval (alias for --no-graph)"),
     log_level: str = typer.Option("WARNING", "--log-level", help="Logging level"),
 ) -> None:
     """Stage 3: Interactive QA terminal or one-shot query."""
@@ -352,7 +360,19 @@ def qa(
     else:
         # Interactive terminal
         from .qa.terminal import run_terminal
-        run_terminal(catalog_dir=catalog_dir, project_id=effective_project_id, collection=collection)
+        run_terminal(
+            catalog_dir=catalog_dir,
+            project_id=effective_project_id,
+            collection=collection,
+            debug_retrieval=debug_retrieval,
+            show_vector_trace=show_vector_trace,
+            show_graph_trace=show_graph_trace,
+            show_context=show_context,
+            strict_project_isolation=strict_project_isolation,
+            graph_confidence_threshold=graph_confidence_threshold,
+            disable_keyword_boost=disable_keyword_boost,
+            vector_only=vector_only or no_graph,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -364,6 +384,7 @@ def graph(
     project_dir: str = typer.Argument(..., help="Project directory containing vlm_parsed/ subdirs"),
     project_id: str = typer.Option("", "--project-id", "-p", help="Stable project ID (ASCII, e.g. sample_20260519)"),
     project_name: str = typer.Option("", "--project-name", "-n", help="Display project name (Japanese OK)"),
+    graph_prompt: str = typer.Option("", "--graph-prompt", help="Graph extraction prompt version (e.g. v4.3, baseline, v4.4). Default: GRAPH_PROMPT_VERSION env or manifest default"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Generate output files but do not load into Neptune"),
     skip_load: bool = typer.Option(False, "--skip-load", help="Skip Neptune loading step"),
     output_dir: str = typer.Option("", "--output-dir", "-o", help="Output directory (default: <project_dir>/graph_output/)"),
@@ -378,10 +399,15 @@ def graph(
 
     Example:
         dualrag graph outputs/サンプル20260519 --project-id sample_20260519 --dry-run
+        dualrag graph outputs/サンプル20260519 --graph-prompt v4.4 --dry-run
     """
     _setup_logging("DEBUG" if verbose else "INFO")
     from .config import config  # noqa: F401 — triggers load_dotenv for NEPTUNE_GRAPH_ID
     from .graph_pipeline import run_pipeline, GraphPipelineConfig
+    from .prompts.registry import get_current_version, get_version
+
+    prompt_version = graph_prompt or get_current_version()
+    pv = get_version(prompt_version)
 
     cfg = GraphPipelineConfig(
         project_id=project_id,
@@ -396,11 +422,12 @@ def graph(
 
     console.print(f"[bold]Graph Pipeline[/bold] — {project_dir}")
     console.print(f"  project_id: {cfg.project_id or '(auto)'}")
+    console.print(f"  graph_prompt: {pv.version} ({pv.name}, adapter={pv.adapter})")
     console.print(f"  dry_run: {cfg.dry_run}")
     console.print(f"  neptune: {cfg.neptune_graph_id or '(from .env)'}")
     console.print()
 
-    result = run_pipeline(project_dir, cfg)
+    result = run_pipeline(project_dir, cfg, prompt_version=prompt_version)
 
     console.print()
     console.print("[bold green]Pipeline complete[/bold green]")

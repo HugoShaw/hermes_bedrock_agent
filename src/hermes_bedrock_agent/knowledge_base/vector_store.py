@@ -187,6 +187,7 @@ def query_vector_store(
     collection: Optional[str] = None,
     project_id: str = "",
     sheet_filter: Optional[list[int]] = None,
+    trace: Optional["VectorTrace"] = None,
 ) -> list[dict]:
     """Query LanceDB with a text query; returns top-k results with metadata.
 
@@ -199,10 +200,17 @@ def query_vector_store(
         project_id: Project ID filter (scopes retrieval to one project).
         sheet_filter: Optional list of sheet indices to restrict results to.
             Combined with project_id filter using AND when both are specified.
+        trace: Optional VectorTrace to populate with debug info.
     """
     cfg = cfg or _default_config
     db_path = store_path or cfg.lancedb_path
     coll_name = collection or cfg.vector_collection
+
+    if trace is not None:
+        trace.collection = coll_name
+        trace.project_filter = project_id
+        trace.sheet_filter = list(sheet_filter) if sheet_filter else []
+        trace.embedding_model = cfg.embed_model_id
 
     if not project_id:
         logger.warning(
@@ -214,7 +222,15 @@ def query_vector_store(
         raise ValueError(f"Collection '{coll_name}' not found in {db_path}")
 
     bedrock = _get_bedrock_client(cfg.aws_region)
-    query_embedding = _embed_text(bedrock, cfg.embed_model_id, query_text)
+
+    if trace is not None:
+        from ..retrieval.trace import Timer
+        with Timer() as embed_timer:
+            query_embedding = _embed_text(bedrock, cfg.embed_model_id, query_text)
+        trace.embedding_latency_ms = embed_timer.elapsed_ms
+    else:
+        query_embedding = _embed_text(bedrock, cfg.embed_model_id, query_text)
+
     table = db.open_table(coll_name)
     search = table.search(query_embedding)
 
@@ -230,4 +246,17 @@ def query_vector_store(
     if filters:
         search = search.where(" AND ".join(filters), prefilter=True)
 
-    return search.limit(top_k).to_list()
+    if trace is not None:
+        from ..retrieval.trace import Timer
+        with Timer() as search_timer:
+            results = search.limit(top_k).to_list()
+        trace.search_latency_ms = search_timer.elapsed_ms
+        trace.raw_results_count = len(results)
+        trace.raw_results = [
+            {"id": r.get("id", ""), "_distance": r.get("_distance", 0.0),
+             "chunk_type": r.get("chunk_type", ""), "sheet_index": r.get("sheet_index", 0)}
+            for r in results[:10]
+        ]
+        return results
+    else:
+        return search.limit(top_k).to_list()

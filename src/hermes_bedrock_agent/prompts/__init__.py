@@ -3,6 +3,7 @@
 from .registry import (
     PromptVersion,
     get_current_version,
+    get_experiment_metadata,
     get_prompt_content,
     get_version,
     list_versions,
@@ -11,6 +12,7 @@ from .registry import (
 __all__ = [
     "PromptVersion",
     "get_current_version",
+    "get_experiment_metadata",
     "get_prompt_content",
     "get_version",
     "list_versions",

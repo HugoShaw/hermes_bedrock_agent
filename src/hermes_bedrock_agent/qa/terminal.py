@@ -115,6 +115,16 @@ class _Session:
         self.catalog: list[dict] = []
         self.catalog_dir: Optional[Path] = None
         self.project_id: str = ""
+        # Debug/trace flags
+        self.debug_retrieval: bool = False
+        self.show_vector_trace: bool = False
+        self.show_graph_trace: bool = False
+        self.show_context: bool = False
+        self.strict_isolation: bool = False
+        self.graph_confidence_threshold: float = 0.0
+        self.disable_keyword_boost: bool = False
+        self.vector_only: bool = False
+        self.last_trace: Optional["RetrievalTrace"] = None
 
 
 def _load_catalog(catalog_dir: Optional[Path]) -> list[dict]:
@@ -239,6 +249,184 @@ def _print_evidence_flow(chunks, dual_graph, evidence_images, elapsed: float, pr
     print()
 
 
+def _filter_graph_by_confidence(dual_graph, threshold: float):
+    """Filter graph edges below confidence threshold.
+
+    Status confidence mapping (higher = more confident):
+        CONFIRMED = 1.0, CANDIDATE = 0.6, POSSIBLY_RELATED = 0.3, NEEDS_REVIEW = 0.1
+    Edges without status are treated as 0.5 (pass at default thresholds).
+    """
+    _STATUS_SCORES = {
+        "CONFIRMED": 1.0,
+        "CANDIDATE": 0.6,
+        "POSSIBLY_RELATED": 0.3,
+        "NEEDS_REVIEW": 0.1,
+    }
+
+    def _passes(edge: dict) -> bool:
+        status = (edge.get("properties") or {}).get("status", "")
+        score = _STATUS_SCORES.get(status.upper(), 0.5)
+        return score >= threshold
+
+    # Filter both layers in-place (create new GraphContext objects)
+    from ..knowledge_base.schemas import GraphContext
+
+    biz = dual_graph.business
+    impl = dual_graph.implementation
+
+    filtered_biz_edges = [e for e in biz.edges if _passes(e)]
+    filtered_impl_edges = [e for e in impl.edges if _passes(e)]
+
+    removed = (len(biz.edges) - len(filtered_biz_edges)) + (len(impl.edges) - len(filtered_impl_edges))
+    if removed > 0:
+        print(f"  {_c(f'⚠ Filtered {removed} low-confidence edge(s) (threshold={threshold})', BYELLOW)}")
+
+    dual_graph.business = GraphContext(nodes=biz.nodes, edges=filtered_biz_edges)
+    dual_graph.implementation = GraphContext(nodes=impl.nodes, edges=filtered_impl_edges)
+    return dual_graph
+
+
+def _print_vector_trace(trace) -> None:
+    """Print vector retrieval trace details."""
+    print(_divider("Vector Trace", "─", CYAN))
+    print(f"  {_c('Collection:', DIM)} {trace.collection}")
+    print(f"  {_c('Project filter:', DIM)} {trace.project_filter or '(none)'}")
+    if trace.sheet_filter:
+        print(f"  {_c('Sheet filter:', DIM)} {trace.sheet_filter}")
+    print(f"  {_c('Embedding model:', DIM)} {trace.embedding_model}")
+    print(f"  {_c('Embedding latency:', DIM)} {trace.embedding_latency_ms:.1f}ms")
+    print(f"  {_c('Search latency:', DIM)} {trace.search_latency_ms:.1f}ms")
+    print(f"  {_c('Raw results:', DIM)} {trace.raw_results_count}")
+    print(f"  {_c('Final chunks:', DIM)} {trace.final_chunks_count}")
+    if trace.raw_results:
+        print(f"  {_c('Top results (id / distance):', DIM)}")
+        for r in trace.raw_results[:5]:
+            dist = r.get("_distance", 0.0)
+            rid = r.get("id", "?")[:40]
+            ctype = r.get("chunk_type", "")
+            print(f"    {_c(rid, BWHITE)}  dist={dist:.4f}  type={ctype}")
+    if trace.keyword_boost_skipped:
+        print(f"  {_c('Keyword boost:', BYELLOW)} DISABLED (--disable-keyword-boost)")
+    elif trace.keyword_boost_applied:
+        print(f"  {_c('Keyword boost applied:', DIM)} {len(trace.keyword_boost_applied)} chunk(s)")
+        for b in trace.keyword_boost_applied[:5]:
+            cid = b.get("chunk_id", "?")[:30]
+            boost_val = b.get("boost", 0)
+            kws = ", ".join(b.get("keywords_matched", [])[:3])
+            print(f"    {_c(cid, DIM)} +{boost_val:.4f} [{kws}]")
+    print()
+
+
+def _print_graph_trace(trace) -> None:
+    """Print graph retrieval trace details."""
+    print(_divider("Graph Trace", "─", YELLOW))
+    if trace.query_terms:
+        terms_str = ", ".join(trace.query_terms[:8])
+        print(f"  {_c('Query terms:', DIM)} {terms_str}")
+    print(f"  {_c('Hint quality:', DIM)} {_c(trace.hint_quality.upper(), BGREEN if trace.hint_quality == 'strong' else BYELLOW if trace.hint_quality == 'weak' else DIM)}")
+    if trace.hint_quality_reason:
+        print(f"  {_c('Reason:', DIM)} {trace.hint_quality_reason}")
+    if trace.sheet_expansion:
+        print(f"  {_c('Sheet expansion:', DIM)} {trace.sheet_expansion}")
+    if trace.system_expansion:
+        print(f"  {_c('System expansion:', DIM)} {', '.join(trace.system_expansion)}")
+    print(f"  {_c('Business layer:', DIM)} {trace.business_nodes} nodes, {trace.business_edges} edges")
+    print(f"  {_c('Implementation layer:', DIM)} {trace.implementation_nodes} nodes, {trace.implementation_edges} edges")
+    print(f"  {_c('Graph latency:', DIM)} {trace.graph_latency_ms:.1f}ms")
+    if trace.edge_confidence_summary:
+        print(f"  {_c('Edge confidence:', DIM)}")
+        for status, count in trace.edge_confidence_summary.items():
+            if count > 0:
+                color = BGREEN if status == "confirmed" else (YELLOW if status == "no_status" else RED)
+                print(f"    {_c(status, color)}: {count}")
+    if trace.low_confidence_edges:
+        print(f"  {_c('Low-confidence edges:', YELLOW)} {len(trace.low_confidence_edges)}")
+        for e in trace.low_confidence_edges[:5]:
+            rel = e.get("relationship", "?")
+            src = e.get("from", "?")[:20]
+            tgt = e.get("to", "?")[:20]
+            props = e.get("properties", {})
+            status = props.get("status", props.get("confidence_status", "?"))
+            print(f"    {_c(src, DIM)} --{rel}--> {_c(tgt, DIM)} [{status}]")
+    print()
+
+
+def _print_timing_trace(trace) -> None:
+    """Print per-stage timing breakdown."""
+    print(_divider("Timing Breakdown", "─", BGREEN))
+    stages = [
+        ("Graph exploration", trace.graph_exploration_ms),
+        ("Graph context build", trace.graph_context_build_ms),
+        ("Vector embedding", trace.vector_embedding_ms),
+        ("Vector search", trace.vector_search_ms),
+        ("Merge + boost", trace.merge_boost_ms),
+        ("Evidence images", trace.evidence_images_ms),
+        ("Answer generation", trace.answer_generation_ms),
+    ]
+    for label, ms in stages:
+        if ms > 0:
+            bar_len = min(30, int(ms / 100))
+            bar = "█" * max(1, bar_len)
+            print(f"  {_c(label.ljust(22), DIM)} {_c(bar, CYAN)} {ms:.0f}ms")
+    print(f"  {_c('Total'.ljust(22), BWHITE)} {trace.total_ms:.0f}ms")
+    print()
+
+
+def _print_isolation_status(trace, strict: bool) -> None:
+    """Print project isolation check results."""
+    print(_divider("Project Isolation", "─", BYELLOW if trace.violations_count else BGREEN))
+    print(f"  {_c('Project:', DIM)} {trace.project_id or '(none)'}")
+    if not trace.project_id:
+        print(f"  {_c('No project filter — isolation check skipped', DIM)}")
+        print()
+        return
+    no_pid_count = len(trace.graph_nodes_without_project_id)
+    if no_pid_count:
+        print(f"  {_c('Nodes without project_id:', YELLOW)} {no_pid_count}")
+        for n in trace.graph_nodes_without_project_id[:5]:
+            print(f"    {_c(n.get('label', '?'), DIM)} {n.get('id', '?')[:30]}")
+    if trace.cross_project_nodes:
+        label = "VIOLATION" if strict else "WARNING"
+        color = RED if strict else YELLOW
+        print(f"  {_c(f'Cross-project nodes ({label}):', color)} {len(trace.cross_project_nodes)}")
+        for n in trace.cross_project_nodes[:5]:
+            node_pid = n.get("project_id", "?")
+            print(f"    {_c(n.get('label', '?'), DIM)} {n.get('id', '?')[:30]} (project: {node_pid})")
+    if trace.violations_count == 0 and no_pid_count == 0:
+        print(f"  {_c('All nodes properly isolated', BGREEN)}")
+    print()
+
+
+def _print_context_summary(chunks, dual_graph, trace) -> None:
+    """Print assembled context overview before LLM call."""
+    print(_divider("Context Assembly", "━", BCYAN))
+    total_chars = sum(len(c.content) for c in chunks)
+    print(f"  {_c('Chunks:', BWHITE)} {len(chunks)} ({total_chars:,} chars)")
+    sheet_set = sorted({c.sheet_index for c in chunks if c.sheet_index > 0})
+    if sheet_set:
+        print(f"  {_c('Sheets covered:', DIM)} {sheet_set}")
+    type_counts: dict = {}
+    for c in chunks:
+        type_counts[c.chunk_type] = type_counts.get(c.chunk_type, 0) + 1
+    if type_counts:
+        types_str = ", ".join(f"{k}:{v}" for k, v in sorted(type_counts.items()))
+        print(f"  {_c('Chunk types:', DIM)} {types_str}")
+    if dual_graph and not dual_graph.is_empty:
+        total_nodes = len(dual_graph.business.nodes) + len(dual_graph.implementation.nodes)
+        total_edges = len(dual_graph.business.edges) + len(dual_graph.implementation.edges)
+        print(f"  {_c('Graph context:', BWHITE)} {total_nodes} nodes, {total_edges} edges")
+    else:
+        print(f"  {_c('Graph context:', DIM)} (none)")
+    if trace and trace.graph.edge_confidence_summary:
+        summary = trace.graph.edge_confidence_summary
+        confirmed = summary.get("confirmed", 0)
+        total_edges_count = sum(summary.values())
+        if total_edges_count > 0:
+            pct = confirmed / total_edges_count * 100
+            print(f"  {_c('Edge confidence:', DIM)} {confirmed}/{total_edges_count} confirmed ({pct:.0f}%)")
+    print()
+
+
 def _print_answer(ans_resp, elapsed: float) -> None:
     print(_divider("Generated Answer", "━", BGREEN))
     w = min(_tw(), 80) - 4
@@ -268,6 +456,9 @@ def _cmd_help() -> None:
         ("/topk N",                       "Set top-K results (1–20, default 5)"),
         ("/verbose",                      "Toggle full chunk content display"),
         ("/evidence",                     "Toggle evidence image loading"),
+        ("/trace",                        "Toggle full retrieval trace"),
+        ("/vector-only",                  "Toggle vector-only mode (skip graph)"),
+        ("/isolation",                    "Show last isolation check status"),
         ("/history",                      "Show recent query history"),
         ("/last",                         "Repeat the last query"),
         ("/stats",                        "Show session statistics"),
@@ -349,20 +540,43 @@ def _run_retrieve(query: str, s: _Session) -> None:
     s.total_latency += elapsed
     _print_chunks(resp.chunks, verbose=s.verbose)
 
+    if s.debug_retrieval or s.show_vector_trace or s.show_graph_trace:
+        print(_c("  Note: --debug-retrieval traces are available in 'answer' mode only.", DIM))
+        print(_c("  Use 'mode answer' for full retrieval tracing.", DIM))
+
 
 def _run_answer(query: str, s: _Session) -> None:
     from ..retrieval.answer_generator import generate_answer, load_evidence_images
     from ..retrieval.graph_guided_retrieval import retrieve_with_graph_guidance
+    from ..retrieval.trace import RetrievalTrace
     from ..config import config
+
+    trace = None
+    debug_active = s.debug_retrieval or s.show_vector_trace or s.show_graph_trace or s.show_context
+    if debug_active:
+        trace = RetrievalTrace(enabled=True)
 
     t0 = time.time()
 
     # Step 1: Graph-guided retrieval (graph exploration → guided vector search → merge)
-    with _Spinner("①② Graph-guided retrieval (graph exploration + vector search)…"):
-        chunks, dual_graph, guidance_status = retrieve_with_graph_guidance(
-            query=query, top_k=s.top_k, project_id=s.project_id,
-        )
+    if s.vector_only:
+        from ..retrieval.vector_retriever import retrieve_chunks as _vec_retrieve
+        with _Spinner("① Vector retrieval (graph skipped)…"):
+            chunks = _vec_retrieve(
+                query=query, top_k=s.top_k, project_id=s.project_id,
+                trace=trace.vector if trace else None,
+            )
+        dual_graph = None
+        guidance_status = "none"
+    else:
+        with _Spinner("①② Graph-guided retrieval (graph exploration + vector search)…"):
+            chunks, dual_graph, guidance_status = retrieve_with_graph_guidance(
+                query=query, top_k=s.top_k, project_id=s.project_id,
+                trace=trace,
+                disable_keyword_boost=s.disable_keyword_boost,
+            )
     t1 = time.time()
+
     # Show guidance status
     _guidance_labels = {
         "strong": _c("ACTIVE", BGREEN) + _c(" (focused sheet filter applied)", DIM),
@@ -371,19 +585,46 @@ def _run_answer(query: str, s: _Session) -> None:
         "error": _c("ERROR", RED) + _c(" (Neptune failed, fell back to vector)", DIM),
     }
     status_label = _guidance_labels.get(guidance_status, guidance_status)
-    _step(f"①② Graph-guided retrieval — {status_label}", t1 - t0)
+    if s.vector_only:
+        _step("① Vector-only retrieval (graph skipped)", t1 - t0)
+    else:
+        _step(f"①② Graph-guided retrieval — {status_label}", t1 - t0)
+
+    # Print debug traces if active
+    if trace and (s.debug_retrieval or s.show_vector_trace):
+        _print_vector_trace(trace.vector)
+    if trace and (s.debug_retrieval or s.show_graph_trace):
+        _print_graph_trace(trace.graph)
+
     _print_chunks(chunks, verbose=s.verbose)
 
     # Show graph context
     if dual_graph and not dual_graph.is_empty:
         _print_dual_graph(dual_graph)
     elif dual_graph is not None:
-        # Neptune available but empty result for this project/query
         _print_dual_graph(dual_graph, neptune_available=True)
     else:
-        # dual_graph is None → Neptune unavailable or guidance_status == 'error'
         neptune_ok = guidance_status != "error"
         _print_dual_graph(None, neptune_available=neptune_ok)
+
+    # Print context summary if requested
+    if trace and (s.debug_retrieval or s.show_context):
+        _print_context_summary(chunks, dual_graph, trace)
+
+    # Isolation check
+    if trace and trace.isolation.project_id:
+        if s.strict_isolation and trace.isolation.violations_count > 0:
+            _print_isolation_status(trace.isolation, strict=True)
+            print(_c("  ERROR: Strict isolation violated — aborting answer generation.", RED))
+            s.last_trace = trace
+            return
+        elif s.debug_retrieval and (trace.isolation.violations_count > 0
+                                    or trace.isolation.graph_nodes_without_project_id):
+            _print_isolation_status(trace.isolation, strict=False)
+
+    # Apply graph confidence threshold — filter low-confidence edges before answer
+    if dual_graph and s.graph_confidence_threshold > 0.0:
+        dual_graph = _filter_graph_by_confidence(dual_graph, s.graph_confidence_threshold)
 
     # Step 2: PDF/PNG evidence resolution from chunk metadata
     evidence_images: list = []
@@ -392,6 +633,8 @@ def _run_answer(query: str, s: _Session) -> None:
             evidence_images = load_evidence_images(chunks, config.project_root)
         t2 = time.time()
         _step(f"③ Evidence image resolution ({len(evidence_images)} pages)", t2 - t1)
+        if trace:
+            trace.timing.evidence_images_ms = (t2 - t1) * 1000
     else:
         t2 = t1
 
@@ -411,25 +654,62 @@ def _run_answer(query: str, s: _Session) -> None:
     t3 = time.time()
     _step("④ VLM answer generation", t3 - t2)
 
+    if trace:
+        trace.timing.answer_generation_ms = (t3 - t2) * 1000
+        trace.timing.total_ms = (t3 - t0) * 1000
+
     s.total_in_tok += ans.input_tokens
     s.total_out_tok += ans.output_tokens
     s.total_latency += t3 - t0
     _print_answer(ans, elapsed=t3 - t0)
 
+    # Print timing trace at end if debug active
+    if trace and s.debug_retrieval:
+        _print_timing_trace(trace.timing)
+
+    if trace:
+        s.last_trace = trace
+
 
 def _run_graph(query: str, s: _Session) -> None:
     from ..retrieval.graph_retriever import fetch_dual_graph_context
     from ..retrieval.vector_retriever import retrieve_chunks
+    from ..retrieval.trace import RetrievalTrace
+
+    trace = None
+    debug_active = s.debug_retrieval or s.show_vector_trace or s.show_graph_trace
+    if debug_active:
+        trace = RetrievalTrace(enabled=True)
 
     t0 = time.time()
     with _Spinner("Retrieving chunks + dual graph…"):
-        chunks = retrieve_chunks(query=query, top_k=s.top_k, project_id=s.project_id)
-        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=s.project_id) if chunks else None
+        chunks = retrieve_chunks(
+            query=query, top_k=s.top_k, project_id=s.project_id,
+            trace=trace.vector if trace else None,
+        )
+        dual_graph = fetch_dual_graph_context(
+            chunks, query=query, project_id=s.project_id,
+            trace=trace.graph if trace else None,
+            isolation_trace=trace.isolation if trace else None,
+        ) if chunks else None
     elapsed = time.time() - t0
     _step("Retrieving chunks + dual graph", elapsed)
     s.total_latency += elapsed
+
+    if trace and (s.debug_retrieval or s.show_vector_trace):
+        _print_vector_trace(trace.vector)
+    if trace and (s.debug_retrieval or s.show_graph_trace):
+        _print_graph_trace(trace.graph)
+
     _print_chunks(chunks, verbose=s.verbose)
     _print_dual_graph(dual_graph)
+
+    if trace and trace.isolation.project_id and s.debug_retrieval:
+        _print_isolation_status(trace.isolation, strict=s.strict_isolation)
+
+    if trace:
+        trace.timing.total_ms = elapsed * 1000
+        s.last_trace = trace
 
 
 def _handle_query(query: str, s: _Session) -> bool:
@@ -487,6 +767,17 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
     elif name == "evidence":
         s.evidence = not s.evidence
         print(_c(f"  Evidence images → {'ON' if s.evidence else 'OFF'}", BGREEN))
+    elif name == "trace":
+        s.debug_retrieval = not s.debug_retrieval
+        print(_c(f"  Debug retrieval trace → {'ON' if s.debug_retrieval else 'OFF'}", BGREEN))
+    elif name in ("vector-only", "vectoronly"):
+        s.vector_only = not s.vector_only
+        print(_c(f"  Vector-only mode → {'ON' if s.vector_only else 'OFF'}", BGREEN))
+    elif name == "isolation":
+        if s.last_trace and s.last_trace.isolation.project_id:
+            _print_isolation_status(s.last_trace.isolation, strict=s.strict_isolation)
+        else:
+            print(_c("  No isolation data yet — run a query first.", DIM))
     elif name == "history":
         if not s.history:
             print(_c("  No queries yet.", DIM))
@@ -515,6 +806,7 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
 _TAB_COMMANDS = [
     "/mode retrieve", "/mode answer", "/mode graph",
     "/topk ", "/verbose", "/evidence",
+    "/trace", "/vector-only", "/isolation",
     "/history", "/last", "/stats",
     "/sheets", "/sheet ", "/help", "/clear", "/quit", "/exit",
 ]
@@ -542,7 +834,19 @@ def _setup_readline() -> None:
         pass
 
 
-def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "", collection: Optional[str] = None) -> None:
+def run_terminal(
+    catalog_dir: Optional[Path] = None,
+    project_id: str = "",
+    collection: Optional[str] = None,
+    debug_retrieval: bool = False,
+    show_vector_trace: bool = False,
+    show_graph_trace: bool = False,
+    show_context: bool = False,
+    strict_project_isolation: bool = False,
+    graph_confidence_threshold: float = 0.0,
+    disable_keyword_boost: bool = False,
+    vector_only: bool = False,
+) -> None:
     """Launch the interactive QA terminal."""
     from ..config import config
 
@@ -556,6 +860,14 @@ def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "", colle
     session.catalog_dir = catalog_dir
     session.catalog = _load_catalog(catalog_dir)
     session.project_id = project_id
+    session.debug_retrieval = debug_retrieval
+    session.show_vector_trace = show_vector_trace
+    session.show_graph_trace = show_graph_trace
+    session.show_context = show_context
+    session.strict_isolation = strict_project_isolation
+    session.graph_confidence_threshold = graph_confidence_threshold
+    session.disable_keyword_boost = disable_keyword_boost
+    session.vector_only = vector_only
 
     os.system("clear")
     _print_header(session, collection, model_id)
@@ -592,3 +904,6 @@ def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "", colle
             print(_c(f"  Project → {new_pid or '(all)'}", BGREEN))
         else:
             _handle_query(raw, session)
+
+
+run_qa_terminal = run_terminal

@@ -9,7 +9,8 @@ from typing import Optional
 
 from ..config import Config, config as _default_config
 from ..knowledge_base.schemas import RetrievedChunk
-from .graph_retriever import DualGraphContext, _extract_entity_names, _node_from_row
+from .graph_retriever import DualGraphContext, _extract_entity_names, _node_from_row, _scan_edge_confidence
+from .trace import RetrievalTrace, Timer, VectorTrace
 
 logger = logging.getLogger(__name__)
 
@@ -507,6 +508,7 @@ def _rows_to_retrieved_chunks(raw_results: list[dict], fallback_project_id: str)
 def _keyword_boost_chunks(
     chunks: list[RetrievedChunk],
     query: str,
+    trace: Optional[VectorTrace] = None,
 ) -> list[RetrievedChunk]:
     """Apply a small score boost to chunks that contain exact query substrings.
 
@@ -542,10 +544,8 @@ def _keyword_boost_chunks(
     boosted: list[RetrievedChunk] = []
     for chunk in chunks:
         content_lower = chunk.content.lower()
-        # Count how many keywords match
         matches = sum(1 for kw in keywords if kw.lower() in content_lower)
         if matches > 0:
-            # Scale boost: +0.02 per keyword match, max +0.08
             boost = min(0.08, matches * 0.02)
             new_score = min(1.0, chunk.score + boost)
             boosted.append(RetrievedChunk(
@@ -559,6 +559,13 @@ def _keyword_boost_chunks(
                 source_excel_s3_path=chunk.source_excel_s3_path,
                 project_id=chunk.project_id,
             ))
+            if trace is not None:
+                matched_kws = [kw for kw in keywords if kw.lower() in content_lower]
+                trace.keyword_boost_applied.append({
+                    "chunk_id": chunk.chunk_id,
+                    "boost": round(boost, 4),
+                    "keywords_matched": matched_kws[:5],
+                })
         else:
             boosted.append(chunk)
 
@@ -570,6 +577,8 @@ def retrieve_with_graph_guidance(
     top_k: int = 5,
     project_id: str = "",
     cfg: Optional[Config] = None,
+    trace: Optional[RetrievalTrace] = None,
+    disable_keyword_boost: bool = False,
 ) -> tuple[list[RetrievedChunk], Optional[DualGraphContext], str]:
     """Graph-guided retrieval pipeline.
 
@@ -600,11 +609,27 @@ def retrieve_with_graph_guidance(
 
     # Step 1: Graph exploration
     try:
-        hints = explore_graph_for_query(query, project_id=project_id)
+        with Timer() as graph_explore_timer:
+            hints = explore_graph_for_query(query, project_id=project_id)
     except Exception as exc:
         logger.warning("Graph exploration failed entirely: %s", exc)
         hints = GraphGuidanceHints()
         hints.quality = "none"
+        graph_explore_timer = Timer()
+
+    if trace is not None:
+        trace.timing.graph_exploration_ms = graph_explore_timer.elapsed_ms
+        trace.graph.query_terms = list(hints.query_entities)
+        trace.graph.sheet_expansion = list(hints.relevant_sheet_indices)
+        trace.graph.system_expansion = list(hints.relevant_systems)
+        trace.graph.hint_quality = hints.quality
+        if hints.quality == "weak":
+            sheet_count = len(hints.relevant_sheet_indices)
+            trace.graph.hint_quality_reason = f"over-broad: {sheet_count} sheets"
+        elif hints.quality == "none":
+            trace.graph.hint_quality_reason = "no graph nodes matched query terms"
+        else:
+            trace.graph.hint_quality_reason = "focused sheet filter"
 
     # Step 2: Evaluate hint quality
     guidance_status = hints.quality
@@ -616,20 +641,26 @@ def retrieve_with_graph_guidance(
             hints.relevant_sheet_indices, hints.relevant_systems,
         )
         try:
-            filtered_raw = query_vector_store(
-                query_text=query,
-                cfg=cfg,
-                top_k=top_k,
-                project_id=project_id,
-                sheet_filter=hints.relevant_sheet_indices,
-            )
+            with Timer() as vec_timer:
+                filtered_raw = query_vector_store(
+                    query_text=query,
+                    cfg=cfg,
+                    top_k=top_k,
+                    project_id=project_id,
+                    sheet_filter=hints.relevant_sheet_indices,
+                    trace=trace.vector if trace else None,
+                )
             guided_chunks = _rows_to_retrieved_chunks(filtered_raw, project_id)
         except Exception as exc:
             logger.warning("Graph-guided filtered query failed, using standard only: %s", exc)
             guided_chunks = []
+            vec_timer = Timer()
 
-        standard_chunks = retrieve_chunks(query=query, top_k=top_k, cfg=cfg, project_id=project_id)
+        with Timer() as std_timer:
+            standard_chunks = retrieve_chunks(query=query, top_k=top_k, cfg=cfg, project_id=project_id)
         chunks = _merge_chunks(guided_chunks, standard_chunks, guided_boost=0.05)
+        if trace is not None:
+            trace.timing.vector_search_ms = vec_timer.elapsed_ms + std_timer.elapsed_ms
 
     elif guidance_status == "weak":
         logger.info(
@@ -637,41 +668,79 @@ def retrieve_with_graph_guidance(
             "using standard vector retrieval, graph for context only",
             len(hints.relevant_sheet_indices),
         )
-        # Don't filter by sheet — the hints are too broad to be useful for filtering
-        # But we still collect graph context for LLM answer grounding
-        chunks = retrieve_chunks(query=query, top_k=top_k, cfg=cfg, project_id=project_id)
+        with Timer() as vec_timer:
+            chunks = retrieve_chunks(
+                query=query, top_k=top_k, cfg=cfg, project_id=project_id,
+                trace=trace.vector if trace else None,
+            )
+        if trace is not None:
+            trace.timing.vector_search_ms = vec_timer.elapsed_ms
 
     else:
         logger.info("No graph hints available — using standard vector retrieval")
-        chunks = retrieve_chunks(query=query, top_k=top_k, cfg=cfg, project_id=project_id)
+        with Timer() as vec_timer:
+            chunks = retrieve_chunks(
+                query=query, top_k=top_k, cfg=cfg, project_id=project_id,
+                trace=trace.vector if trace else None,
+            )
+        if trace is not None:
+            trace.timing.vector_search_ms = vec_timer.elapsed_ms
 
     # Step 4: Keyword boost — helps exact-text and keyword-heavy queries
-    chunks = _keyword_boost_chunks(chunks, query)
+    with Timer() as boost_timer:
+        if not disable_keyword_boost:
+            chunks = _keyword_boost_chunks(chunks, query, trace=trace.vector if trace else None)
+        elif trace is not None:
+            trace.vector.keyword_boost_skipped = True
+    if trace is not None:
+        trace.timing.merge_boost_ms = boost_timer.elapsed_ms
 
     if not chunks:
         return [], None, guidance_status
 
     # Step 5: Build graph context (for LLM, even when hints are weak)
     dual_graph: Optional[DualGraphContext] = None
-    if hints.graph_context is not None:
-        dual_graph = hints.graph_context
-    elif hints.relevant_sheet_indices or hints.relevant_systems:
-        # Build context whenever we have ANY graph info (even weak hints)
-        try:
-            from ..clients.neptune import NeptuneClient
-            client = NeptuneClient()
-            if client.is_configured:
-                dual_graph = _build_dual_graph_from_hints(client, hints, query, project_id)
-        except Exception as exc:
-            logger.debug("Graph context build from hints failed: %s", exc)
+    with Timer() as ctx_timer:
+        if hints.graph_context is not None:
+            dual_graph = hints.graph_context
+        elif hints.relevant_sheet_indices or hints.relevant_systems:
+            try:
+                from ..clients.neptune import NeptuneClient
+                client = NeptuneClient()
+                if client.is_configured:
+                    dual_graph = _build_dual_graph_from_hints(client, hints, query, project_id)
+            except Exception as exc:
+                logger.debug("Graph context build from hints failed: %s", exc)
 
-    if dual_graph is None or dual_graph.is_empty:
-        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=project_id)
-    elif dual_graph.business.nodes == [] and dual_graph.business.edges == []:
-        # Business layer empty but implementation has data — try to fill business from fallback
-        fallback = fetch_dual_graph_context(chunks, query=query, project_id=project_id)
-        if fallback and fallback.business.nodes:
-            dual_graph.business = fallback.business
+        if dual_graph is None or dual_graph.is_empty:
+            dual_graph = fetch_dual_graph_context(
+                chunks, query=query, project_id=project_id,
+                trace=trace.graph if trace else None,
+                isolation_trace=trace.isolation if trace else None,
+            )
+        elif dual_graph.business.nodes == [] and dual_graph.business.edges == []:
+            fallback = fetch_dual_graph_context(
+                chunks, query=query, project_id=project_id,
+                trace=trace.graph if trace else None,
+                isolation_trace=trace.isolation if trace else None,
+            )
+            if fallback and fallback.business.nodes:
+                dual_graph.business = fallback.business
+
+    if trace is not None:
+        trace.timing.graph_context_build_ms = ctx_timer.elapsed_ms
+        if dual_graph:
+            trace.graph.business_nodes = len(dual_graph.business.nodes)
+            trace.graph.business_edges = len(dual_graph.business.edges)
+            trace.graph.implementation_nodes = len(dual_graph.implementation.nodes)
+            trace.graph.implementation_edges = len(dual_graph.implementation.edges)
+            all_edges = dual_graph.business.edges + dual_graph.implementation.edges
+            summary, low = _scan_edge_confidence(all_edges)
+            trace.graph.edge_confidence_summary = summary
+            trace.graph.low_confidence_edges = low
+        total = (trace.timing.graph_exploration_ms + trace.timing.vector_search_ms
+                 + trace.timing.merge_boost_ms + trace.timing.graph_context_build_ms)
+        trace.timing.total_ms = total
 
     return chunks[:top_k], dual_graph, guidance_status
 

@@ -66,6 +66,7 @@ class RetrievedChunk(BaseModel):
     source_pdf_s3_path: str
     source_excel_s3_path: str
     project_id: str = ""
+    parsed_markdown_path: str = ""
 
 
 class GraphContext(BaseModel):

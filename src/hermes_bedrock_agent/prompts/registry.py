@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +26,8 @@ class PromptVersion:
     sha256: str
     scope: str
     created_at: str
+    adapter: str
+    status: str
 
 
 def _load_manifest() -> dict:
@@ -54,6 +57,8 @@ def list_versions() -> list[PromptVersion]:
             sha256=_compute_sha256(prompt_file),
             scope=meta.get("scope", "chunk"),
             created_at=meta.get("created_at", ""),
+            adapter=meta.get("adapter", "chunk_level"),
+            status=meta.get("status", "experimental"),
         ))
     return versions
 
@@ -75,6 +80,8 @@ def get_version(version_id: str) -> PromptVersion:
         sha256=_compute_sha256(prompt_file),
         scope=meta.get("scope", "chunk"),
         created_at=meta.get("created_at", ""),
+        adapter=meta.get("adapter", "chunk_level"),
+        status=meta.get("status", "experimental"),
     )
 
 
@@ -99,3 +106,50 @@ def get_code_version() -> str:
     """Get the current code version from git tag or pyproject.toml."""
     from ..version import get_code_version as _get_code_version
     return _get_code_version()
+
+
+def _get_git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _get_git_branch() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _get_git_tag() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "describe", "--tags", "--always"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
+
+def get_experiment_metadata(version_id: str) -> dict:
+    """Return full experiment metadata dict for saving in output files."""
+    pv = get_version(version_id)
+    return {
+        "git_commit": _get_git_commit(),
+        "git_branch": _get_git_branch(),
+        "git_tag": _get_git_tag(),
+        "code_version": get_code_version(),
+        "graph_prompt_version": pv.version,
+        "graph_prompt_scope": pv.scope,
+        "graph_prompt_adapter": pv.adapter,
+        "graph_prompt_file_path": str(pv.prompt_file),
+        "graph_prompt_sha256": pv.sha256,
+        "created_at": pv.created_at,
+    }

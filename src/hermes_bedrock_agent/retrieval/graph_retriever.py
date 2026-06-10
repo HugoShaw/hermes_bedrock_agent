@@ -14,6 +14,7 @@ import re
 from typing import Optional
 
 from ..knowledge_base.schemas import GraphContext, RetrievedChunk
+from .trace import GraphTrace, IsolationTrace
 
 logger = logging.getLogger(__name__)
 
@@ -429,13 +430,68 @@ def _fetch_implementation_graph(client, chunks: list[RetrievedChunk], query: str
     return GraphContext(nodes=nodes[:60], edges=edges[:80])
 
 
+def _scan_edge_confidence(edges: list[dict]) -> tuple[dict, list[dict]]:
+    """Scan edges for confidence/status properties.
+
+    Returns (summary_dict, low_confidence_list).
+    """
+    summary = {"confirmed": 0, "candidate": 0, "possibly_related": 0,
+               "needs_review": 0, "no_status": 0}
+    low_confidence: list[dict] = []
+    for edge in edges:
+        props = edge.get("properties", {})
+        status = props.get("status", props.get("confidence_status", "")).lower()
+        if status in ("confirmed", "validated"):
+            summary["confirmed"] += 1
+        elif status == "candidate":
+            summary["candidate"] += 1
+            low_confidence.append(edge)
+        elif status in ("possibly_related", "possible"):
+            summary["possibly_related"] += 1
+            low_confidence.append(edge)
+        elif status in ("needs_review", "review"):
+            summary["needs_review"] += 1
+            low_confidence.append(edge)
+        else:
+            summary["no_status"] += 1
+    return summary, low_confidence
+
+
+def _check_isolation(
+    dual: DualGraphContext,
+    project_id: str,
+    isolation_trace: Optional[IsolationTrace] = None,
+) -> None:
+    """Check nodes for project isolation violations."""
+    if not project_id or isolation_trace is None:
+        return
+    isolation_trace.project_id = project_id
+    all_nodes = dual.business.nodes + dual.implementation.nodes
+    for node in all_nodes:
+        props = node.get("properties", {})
+        node_pid = props.get("project_id", "")
+        node_pname = props.get("project_name", "")
+        if not node_pid and not node_pname:
+            isolation_trace.graph_nodes_without_project_id.append(
+                {"id": node.get("id", ""), "label": node.get("label", "")}
+            )
+        elif node_pid and node_pid != project_id and node_pname != project_id:
+            isolation_trace.cross_project_nodes.append(
+                {"id": node.get("id", ""), "label": node.get("label", ""),
+                 "project_id": node_pid}
+            )
+    isolation_trace.violations_count = len(isolation_trace.cross_project_nodes)
+
+
 def fetch_dual_graph_context(
     chunks: list[RetrievedChunk],
     query: str = "",
     project_id: str = "",
+    trace: Optional[GraphTrace] = None,
+    isolation_trace: Optional[IsolationTrace] = None,
 ) -> Optional[DualGraphContext]:
     """Retrieve two-layer graph context: business semantic + implementation.
-    
+
     WARNING: If project_id is empty, graph queries will traverse ALL projects.
     """
     try:
@@ -453,6 +509,19 @@ def fetch_dual_graph_context(
         dual = DualGraphContext()
         dual.business = _fetch_business_graph(client, chunks, query, project_id=project_id)
         dual.implementation = _fetch_implementation_graph(client, chunks, query, project_id=project_id)
+
+        if trace is not None:
+            trace.business_nodes = len(dual.business.nodes)
+            trace.business_edges = len(dual.business.edges)
+            trace.implementation_nodes = len(dual.implementation.nodes)
+            trace.implementation_edges = len(dual.implementation.edges)
+            all_edges = dual.business.edges + dual.implementation.edges
+            summary, low = _scan_edge_confidence(all_edges)
+            trace.edge_confidence_summary = summary
+            trace.low_confidence_edges = low
+
+        if isolation_trace is not None:
+            _check_isolation(dual, project_id, isolation_trace)
 
         logger.info(
             "Dual graph context: business=%d nodes/%d edges, implementation=%d nodes/%d edges",

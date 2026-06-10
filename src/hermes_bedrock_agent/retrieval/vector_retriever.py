@@ -8,6 +8,7 @@ from typing import Optional
 from ..config import Config, config as _default_config
 from ..knowledge_base.schemas import RetrievedChunk
 from ..knowledge_base.vector_store import query_vector_store
+from .trace import VectorTrace
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ def retrieve_chunks(
     store_path: Optional[str] = None,
     collection: Optional[str] = None,
     project_id: str = "",
+    trace: Optional[VectorTrace] = None,
 ) -> list[RetrievedChunk]:
     """Retrieve top-K chunks from LanceDB for a text query."""
     cfg = cfg or _default_config
@@ -26,12 +28,12 @@ def retrieve_chunks(
         query_text=query, cfg=cfg, top_k=top_k,
         store_path=store_path, collection=collection,
         project_id=project_id,
+        trace=trace,
     )
 
     chunks: list[RetrievedChunk] = []
     for row in raw_results:
         distance = row.get("_distance", 0.0)
-        # Use inverse distance for scoring: 1/(1+d) gives proper [0, 1] range for L2 distance
         score = 1.0 / (1.0 + distance)
         chunks.append(RetrievedChunk(
             chunk_id=row.get("id", ""),
@@ -43,5 +45,10 @@ def retrieve_chunks(
             source_pdf_s3_path=row.get("source_pdf_s3_path", ""),
             source_excel_s3_path=row.get("source_excel_s3_path", ""),
             project_id=row.get("project_id", project_id),
+            parsed_markdown_path=row.get("parsed_markdown_path", ""),
         ))
+
+    if trace is not None:
+        trace.final_chunks_count = len(chunks)
+
     return chunks

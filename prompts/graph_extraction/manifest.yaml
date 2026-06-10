@@ -3,6 +3,8 @@ versions:
     name: "V4.3 Universal Semantic Map"
     file: "v43_chunk_level.md"
     scope: chunk
+    adapter: chunk_level
+    status: production
     description: "Chunk-level entity+edge extraction. Production default since 2025-05."
     created_at: "2025-05-01"
 
@@ -10,6 +12,8 @@ versions:
     name: "Baseline Full Semantic Map V4"
     file: "baseline_semantic_map_v4.md"
     scope: document
+    adapter: document_to_chunk
+    status: experimental
     description: "Document-level full semantic map rebuild. Legacy comparison baseline."
     created_at: "2025-04-15"
 
@@ -17,6 +21,8 @@ versions:
     name: "V4.4 Full Clean Semantic Map"
     file: "v44_semantic_map_full_clean.md"
     scope: document
+    adapter: document_to_chunk
+    status: experimental
     description: "Document-level extraction with improved entity types and edge coverage."
     created_at: "2025-06-08"
 

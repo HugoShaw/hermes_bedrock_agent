@@ -227,6 +227,28 @@ def _serialize_graph_context(graph_context: Optional[GraphContext]) -> str:
                                   "Entity relationships, system connections, and data flows.")
 
 
+def _derive_pdf_from_markdown_path(md_path: str) -> Optional[Path]:
+    """Derive PDF evidence path from parsed_markdown_path.
+
+    Experiment chunks store paths like:
+      .../outputs/14_債務奉行クラウド/run_.../Workbook/vlm_parsed/sheet_02.md
+    The corresponding PDF is at:
+      .../outputs/14_債務奉行クラウド/run_.../Workbook/pdf/sheet_02.pdf
+    """
+    if not md_path:
+        return None
+    p = Path(md_path)
+    # Expected: .../vlm_parsed/sheet_XX.md → .../pdf/sheet_XX.pdf
+    if p.parent.name == "vlm_parsed":
+        pdf_path = p.parent.parent / "pdf" / p.with_suffix(".pdf").name
+        return pdf_path
+    # Also handle csv_parsed → pdf
+    if p.parent.name == "csv_parsed":
+        pdf_path = p.parent.parent / "pdf" / p.with_suffix(".pdf").name
+        return pdf_path
+    return None
+
+
 def load_evidence_images(
     chunks: list[RetrievedChunk],
     project_root: Path,
@@ -236,7 +258,8 @@ def load_evidence_images(
 
     Resolution order for each chunk:
       1. Try source_pdf_s3_path → local PDF → render page 1 to PNG
-      2. Try corresponding PNG in images/ directory (pre-rendered)
+      2. Try parsed_markdown_path → derive sibling pdf/ path → render to PNG
+      3. Try corresponding PNG in images/ directory (pre-rendered)
 
     Returns list of (label, png_bytes, local_path_str).
     """
@@ -246,14 +269,32 @@ def load_evidence_images(
     for chunk in chunks:
         if len(results) >= max_images:
             break
-        s3_path = chunk.source_pdf_s3_path
-        if not s3_path or s3_path in seen_paths:
-            continue
-        seen_paths.add(s3_path)
 
-        local_path = _s3_path_to_local(s3_path, project_root)
+        local_path: Optional[Path] = None
+        dedup_key: str = ""
+
+        # Strategy A: Use source_pdf_s3_path (production path)
+        s3_path = chunk.source_pdf_s3_path
+        if s3_path:
+            dedup_key = s3_path
+            if dedup_key in seen_paths:
+                continue
+            local_path = _s3_path_to_local(s3_path, project_root)
+
+        # Strategy B: Derive PDF from parsed_markdown_path (experiment path)
+        if local_path is None or (local_path and not local_path.exists()):
+            derived = _derive_pdf_from_markdown_path(chunk.parsed_markdown_path)
+            if derived is not None:
+                dedup_key = str(derived)
+                if dedup_key in seen_paths:
+                    continue
+                local_path = derived
+
+        if not dedup_key or dedup_key in seen_paths:
+            continue
         if local_path is None:
             continue
+        seen_paths.add(dedup_key)
 
         png_bytes: Optional[bytes] = None
         resolved_path = str(local_path)
@@ -278,7 +319,7 @@ def load_evidence_images(
                         break
 
         if png_bytes is None:
-            logger.debug("No visual evidence found for: %s", s3_path)
+            logger.debug("No visual evidence found for: %s (local_path=%s)", dedup_key, local_path)
             continue
 
         label = f"Sheet {chunk.sheet_index} ({chunk.sheet_name}) — {Path(resolved_path).name}"

@@ -145,6 +145,7 @@ def _as_pipeline_edge(d: dict) -> PipelineEdge:
 def run_pipeline(
     project_dir: str | Path,
     cfg: GraphPipelineConfig,
+    prompt_version: str | None = None,
 ) -> PipelineResult:
     """Run the complete v4.2 graph extraction and loading pipeline.
 
@@ -240,7 +241,8 @@ def run_pipeline(
             file_rec["workbook_name"], file_rec["sheet_name"], file_rec["sheet_type"],
         )
         nodes, edges = extract_from_markdown(
-            file_rec, cfg, project_sheet_summary, bedrock_client, cache_dir
+            file_rec, cfg, project_sheet_summary, bedrock_client, cache_dir,
+            prompt_version=prompt_version,
         )
         all_raw_nodes.extend(nodes)
         all_raw_edges.extend(edges)

@@ -31,33 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 def _load_prompt_from_registry(version_id: str) -> tuple[str, str, str]:
-    """Load system/node/edge prompts from a registered prompt version file.
+    """Load prompts via the registry adapter. Never silently falls back."""
+    from ..prompts.adapters import get_extraction_prompts
 
-    Returns (system_prompt, node_prompt_template, edge_prompt_template).
-    Falls back to inline defaults if parsing fails.
-    """
-    import re as _re
-    from ..prompts.registry import get_prompt_content
-
-    content = get_prompt_content(version_id)
-
-    def _extract_section(tag: str) -> str:
-        pattern = f"<{tag}>(.*?)</{tag}>"
-        match = _re.search(pattern, content, _re.DOTALL)
-        return match.group(1).strip() if match else ""
-
-    system = _extract_section("system_prompt")
-    node = _extract_section("node_extraction_prompt")
-    edge = _extract_section("edge_extraction_prompt")
-
-    if not system or not node or not edge:
-        logger.warning(
-            "Prompt version '%s' missing sections, falling back to inline defaults",
-            version_id,
-        )
-        return _SYSTEM_PROMPT, _V4_NODE_EXTRACTION_PROMPT, _V4_EDGE_EXTRACTION_PROMPT
-
-    return system, node, edge
+    prompts = get_extraction_prompts(version_id)
+    return prompts.system_prompt, prompts.node_prompt, prompts.edge_prompt
 
 # ── V4.3 Prompts ──────────────────────────────────────────────────────────────
 
