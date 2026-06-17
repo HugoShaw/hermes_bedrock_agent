@@ -1,17 +1,15 @@
-"""Shared utilities for the graph pipeline."""
-
-from __future__ import annotations
+"""Graph pipeline utilities."""
 
 import re
-import unicodedata
 
 
-def normalize_id(text: str) -> str:
-    """Normalize text to a stable ID component (keeps Japanese chars, collapses separators)."""
-    text = unicodedata.normalize("NFC", text)
-    text = re.sub(r"[\s\-/\\]+", "_", text)
-    text = re.sub(r"[^\w]", "_", text)
-    text = re.sub(r"_+", "_", text).strip("_")
-    if text.isascii():
-        text = text.lower()
-    return text[:80]
+def normalize_id(raw: str) -> str:
+    """Normalize a raw string into a safe ID component (lowercase, alphanumeric + underscore)."""
+    if not raw:
+        return "unknown"
+    # Convert to lowercase and replace non-alphanumeric chars with underscore
+    result = re.sub(r"[^a-z0-9_]", "_", raw.lower().strip())
+    # Collapse multiple underscores
+    result = re.sub(r"_+", "_", result)
+    # Strip leading/trailing underscores
+    return result.strip("_") or "unknown"

@@ -75,11 +75,15 @@ def _load_chunk_level(version_id: str) -> ExtractionPrompts:
 _DOCUMENT_TO_CHUNK_MODULES = {
     "baseline": "hermes_bedrock_agent.experiments.baseline_prompts",
     "v4.4": "hermes_bedrock_agent.experiments.v44_prompts",
+    "v4.5": "hermes_bedrock_agent.experiments.v45_prompts",
+    "v4.5.1": "hermes_bedrock_agent.experiments.v451_prompts",
 }
 
 _DOCUMENT_TO_CHUNK_PREFIXES = {
     "baseline": "BASELINE",
     "v4.4": "V44",
+    "v4.5": "V45",
+    "v4.5.1": "V451",
 }
 
 

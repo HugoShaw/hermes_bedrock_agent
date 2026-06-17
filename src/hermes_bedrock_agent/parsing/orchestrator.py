@@ -80,12 +80,12 @@ _compute_content_hash = compute_content_hash
 _download_s3_file = download_s3_file
 
 _TYPE_SUBDIR_MAP = {
-    "docx": "docs",
-    "doc_vlm": "docs",
-    "pdf_vlm": "docs",
-    "html": "docs",
-    "text": "docs",
-    "markdown": "docs",
+    "docx": "docx",
+    "doc_vlm": "pdf",
+    "pdf_vlm": "pdf",
+    "html": "html",
+    "text": "txt",
+    "markdown": "txt",
     "csv": "csv",
     "image_vlm": "images",
     "code": "code",
@@ -96,8 +96,12 @@ _TYPE_SUBDIR_MAP = {
 
 
 def _get_type_subdir(parser_type: str) -> str:
-    """Map parser_type to type-aware subdirectory under parsed/ and evidence/."""
-    return _TYPE_SUBDIR_MAP.get(parser_type, "docs")
+    """Map parser_type to type-aware subdirectory under parsed/ and evidence/.
+
+    Canonical directories: excel, mermaid, csv, code, pdf, docx, html, txt, images.
+    No longer uses a generic 'docs' bucket.
+    """
+    return _TYPE_SUBDIR_MAP.get(parser_type, "txt")
 
 
 def _generate_frontmatter(
@@ -106,14 +110,31 @@ def _generate_frontmatter(
     parse_method: str,
     content_hash: str,
     evidence_paths: list[str] | None = None,
+    *,
+    document_id: str = "",
+    document_name: str = "",
 ) -> str:
-    """Generate YAML frontmatter for parsed Markdown output."""
+    """Generate YAML frontmatter for parsed Markdown output.
+
+    Emits canonical metadata fields expected by the chunker:
+      source_file, source_type, parser_type, document_type, document_id, document_name,
+      project_id, evidence_paths, etc.
+    """
+    # Normalize source_type: excel_sheet → excel (canonical)
+    source_type_val = pf.source_type.value
+    if source_type_val == "excel_sheet":
+        source_type_val = "excel"
+    # document_type mirrors the canonical source_type
+    document_type_val = source_type_val
     lines = [
         "---",
         f"source_file: \"{pf.relative_path}\"",
-        f"source_type: {pf.source_type.value}",
+        f"source_type: {source_type_val}",
         f"document_role: {pf.document_role}",
         f"parser_type: {pf.parser_type}",
+        f"document_type: {document_type_val}",
+        f"document_id: \"{document_id}\"",
+        f"document_name: \"{document_name}\"",
         f"project_id: {project_id}",
         f"parsed_at: \"{datetime.now().isoformat()}\"",
         f"content_hash: \"{content_hash}\"",
@@ -330,6 +351,8 @@ def run_project_parsing(
             frontmatter = _generate_frontmatter(
                 pf, project_id, doc.parse_method,
                 doc.content_hash, evidence_paths,
+                document_id=doc.doc_id,
+                document_name=doc.title,
             )
 
             type_parsed_dir = parsed_dir / type_subdir

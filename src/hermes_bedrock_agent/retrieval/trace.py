@@ -65,6 +65,34 @@ class TimingTrace:
 
 
 @dataclass
+class HybridTrace:
+    """Trace data from hybrid retrieval pipeline."""
+    normalized_query: str = ""
+    intent_label: str = ""
+    intent_confidence: float = 0.0
+    business_query: str = ""
+    technical_query: str = ""
+    keyword_query: str = ""
+    vector_hits_count: int = 0
+    keyword_hits_count: int = 0
+    merged_count: int = 0
+    dedup_removed: int = 0
+
+
+@dataclass
+class RerankTrace:
+    """Trace data from reranking stage."""
+    enabled: bool = False
+    model_id: str = ""
+    candidate_count: int = 0
+    final_count: int = 0
+    reranked: bool = False
+    error: str = ""
+    latency_ms: float = 0.0
+    rank_comparison: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class RetrievalTrace:
     """Complete retrieval trace for one query."""
     enabled: bool = False
@@ -72,6 +100,8 @@ class RetrievalTrace:
     graph: GraphTrace = field(default_factory=GraphTrace)
     isolation: IsolationTrace = field(default_factory=IsolationTrace)
     timing: TimingTrace = field(default_factory=TimingTrace)
+    hybrid: HybridTrace = field(default_factory=HybridTrace)
+    rerank: RerankTrace = field(default_factory=RerankTrace)
 
 
 class Timer:

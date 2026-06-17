@@ -31,6 +31,7 @@ from .display import build_display_graph, generate_review_tasks
 from .evidence import split_evidence_units
 from .extractor import extract_from_markdown
 from .loader import run_load
+from .mermaid_extractor import extract_from_mermaid_structure, find_mermaid_structures
 from .normalizer import normalize_entities, save_registry
 from .report import generate_extraction_report, generate_graph_explore_queries
 from .scanner import scan_markdown_files
@@ -46,9 +47,10 @@ __all__ = ["run_pipeline", "GraphPipelineConfig", "PipelineResult"]
 def _resolve_input_dirs(project_dir: Path) -> list[str]:
     """Find markdown directories under project_dir.
 
-    Supports both:
-    - New structure: parsed/docs/, parsed/csv/, parsed/images/, etc.
+    Supports:
+    - New structure: parsed/docs/, parsed/csv/, parsed/images/, parsed/mermaid/, etc.
     - Legacy structure: <workbook>/vlm_parsed/
+    - Mermaid artifacts: mermaid/**/  (top-level mermaid dir with .md/.json/.mmd)
     """
     dirs: list[str] = []
 
@@ -61,6 +63,41 @@ def _resolve_input_dirs(project_dir: Path) -> list[str]:
     for d in project_dir.rglob("vlm_parsed"):
         if d.is_dir() and str(d) not in dirs:
             dirs.append(str(d))
+
+    # Include top-level mermaid/ directory and its subdirectories
+    mermaid_dir = project_dir / "mermaid"
+    if mermaid_dir.exists() and mermaid_dir.is_dir():
+        # Collect all relevant subdirs first
+        mermaid_subdirs = []
+        for subdir in sorted(mermaid_dir.rglob("*")):
+            if subdir.is_dir() and str(subdir) not in dirs:
+                # Only include dirs that contain .md, .json, or .mmd files
+                has_relevant = any(
+                    f.suffix in (".md", ".json", ".mmd")
+                    for f in subdir.iterdir() if f.is_file()
+                )
+                if has_relevant:
+                    mermaid_subdirs.append(str(subdir))
+        # Add subdirs (prefer deepest first to avoid parent duplicating children)
+        dirs.extend(mermaid_subdirs)
+        # Only add mermaid/ itself if it has MERMAID files (not just metadata)
+        # NOT already covered by subdirs
+        _mermaid_content_names = {"mermaid_parsed.md", "mermaid_structure.json", "mermaid_raw.mmd"}
+        has_uncovered = any(
+            f.name in _mermaid_content_names
+            and not any(f.is_relative_to(Path(sd)) for sd in mermaid_subdirs)
+            for f in mermaid_dir.iterdir() if f.is_file()
+        )
+        if has_uncovered and str(mermaid_dir) not in dirs:
+            dirs.append(str(mermaid_dir))
+
+    # Also pick up parsed/mermaid/** if it exists (new structure)
+    parsed_mermaid = project_dir / "parsed" / "mermaid"
+    if parsed_mermaid.exists() and str(parsed_mermaid) not in dirs:
+        dirs.append(str(parsed_mermaid))
+        for subdir in sorted(parsed_mermaid.rglob("*")):
+            if subdir.is_dir() and str(subdir) not in dirs:
+                dirs.append(str(subdir))
 
     if not dirs:
         dirs = [str(project_dir)]
@@ -229,6 +266,12 @@ def run_pipeline(
         f for f in inventory
         if f["read_status"] == "success" and f["content_length"] >= 100
     ]
+    # Skip .json and .mmd files from LLM extraction — they're handled by the
+    # structured mermaid extractor (Phase 2b) which produces better results
+    processable = [
+        f for f in processable
+        if not f.get("file_path", "").endswith((".json", ".mmd"))
+    ]
     logger.info("  Processing %d files...", len(processable))
 
     all_raw_nodes: list[dict] = []
@@ -254,12 +297,56 @@ def run_pipeline(
         len(all_raw_nodes), len(all_raw_edges),
     )
 
+    # Fix link_method: edges from non-mermaid sources must not use 'explicit_mermaid_edge'
+    _mermaid_source_indicators = ("mermaid/", "mermaid\\", ".mmd", "mermaid_structure.json", "mermaid_parsed.md")
+    corrected_link_method_count = 0
+    for edge in all_raw_edges:
+        if edge.get("link_method") == "explicit_mermaid_edge":
+            sf = edge.get("source_file", "")
+            if not any(ind in sf for ind in _mermaid_source_indicators):
+                edge["link_method"] = "structured_visual_edge"
+                corrected_link_method_count += 1
+    if corrected_link_method_count:
+        logger.info(
+            "  Corrected %d edges from 'explicit_mermaid_edge' to 'structured_visual_edge' (non-mermaid source)",
+            corrected_link_method_count,
+        )
+
+    # ── Phase 2b: Mermaid structured extraction (non-LLM) ─────────────────────
+    logger.info("Phase 2b: Mermaid structured extraction...")
+    mermaid_structures = find_mermaid_structures(project_dir)
+    mermaid_nodes_count = 0
+    mermaid_edges_count = 0
+    for mermaid_path in mermaid_structures:
+        m_nodes, m_edges = extract_from_mermaid_structure(
+            mermaid_path, project_id, project_name
+        )
+        all_raw_nodes.extend(m_nodes)
+        all_raw_edges.extend(m_edges)
+        mermaid_nodes_count += len(m_nodes)
+        mermaid_edges_count += len(m_edges)
+    if mermaid_structures:
+        logger.info(
+            "  Mermaid: %d structures -> %d nodes, %d edges",
+            len(mermaid_structures), mermaid_nodes_count, mermaid_edges_count,
+        )
+    else:
+        logger.info("  No mermaid_structure.json found")
+
     # ── Phase 3: Normalization ────────────────────────────────────────────────
     logger.info("Phase 3: Normalizing and building ID registry...")
     normalized_nodes, normalized_edges, registry = normalize_entities(
         all_raw_nodes, all_raw_edges, project_id, project_name
     )
     save_registry(registry, output_dir / "semantic_map_02_id_registry.json")
+
+    # Write unresolved edge endpoints for explicit tracking
+    unresolved_edges = registry.get("unresolved_edges", [])
+    if unresolved_edges:
+        with open(output_dir / "unresolved_edge_endpoints.jsonl", "w", encoding="utf-8") as f:
+            for entry in unresolved_edges:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        logger.warning("  Wrote %d unresolved edges to unresolved_edge_endpoints.jsonl", len(unresolved_edges))
 
     # ── Phase 4: Structure layer ──────────────────────────────────────────────
     logger.info("Phase 4: Building structure layer...")
@@ -368,6 +455,7 @@ def run_pipeline(
     preflight_report, has_p0 = run_preflight_check(
         all_nodes, all_edges, display_nodes, display_edges,
         project_id, project_name, inventory,
+        registry=registry,
     )
     (output_dir / "semantic_map_preflight_check.md").write_text(preflight_report, encoding="utf-8")
 
@@ -386,6 +474,7 @@ def run_pipeline(
         preflight_report, has_p0 = run_preflight_check(
             all_nodes, all_edges, display_nodes, display_edges,
             project_id, project_name, inventory,
+            registry=registry,
         )
         (output_dir / "semantic_map_preflight_check.md").write_text(preflight_report, encoding="utf-8")
 

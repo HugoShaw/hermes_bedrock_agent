@@ -18,11 +18,10 @@ _LANG_MAP = {
     ".htm": "html", ".py": "python", ".java": "java", ".sh": "bash",
     ".bat": "bat", ".sql": "sql", ".xml": "xml", ".json": "json",
     ".yaml": "yaml", ".yml": "yaml", ".properties": "properties",
-    ".toml": "toml", ".ini": "ini", ".md": "markdown", ".txt": "text",
-    ".log": "text",
+    ".toml": "toml", ".ini": "ini", ".md": "markdown",
 }
 
-_HANDLED_TYPES = {SourceType.CODE, SourceType.PLAINTEXT, SourceType.UNKNOWN}
+_HANDLED_TYPES = {SourceType.CODE, SourceType.UNKNOWN}
 
 
 def _detect_encoding(path: Path) -> str:

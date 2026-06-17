@@ -40,16 +40,37 @@ def _derive_workbook_name(md_file: Path) -> str:
 
 
 def scan_markdown_files(project_id: str, project_name: str, input_dirs: list[str]) -> list[dict]:
-    """Recursively find all .md files under input_dirs and build an inventory list."""
+    """Recursively find all .md and mermaid .json files under input_dirs and build an inventory list."""
     inventory = []
     for input_dir in input_dirs:
         p = Path(input_dir).expanduser()
         if not p.exists():
             logger.warning("Input dir not found: %s", input_dir)
             continue
-        for md_file in sorted(p.rglob("*.md")):
+
+        # Collect .md files and mermaid-related .json/.mmd files
+        candidate_files = sorted(p.rglob("*.md"))
+        # Include mermaid_structure.json and mermaid_parsed.md (already .md)
+        # Also include .mmd files and mermaid .json files from mermaid/ dirs
+        is_mermaid_dir = "mermaid" in str(p).lower()
+        if is_mermaid_dir:
+            for json_file in sorted(p.rglob("*.json")):
+                if json_file not in candidate_files:
+                    candidate_files.append(json_file)
+            for mmd_file in sorted(p.rglob("*.mmd")):
+                if mmd_file not in candidate_files:
+                    candidate_files.append(mmd_file)
+
+        for md_file in sorted(candidate_files):
             workbook_name = _derive_workbook_name(md_file)
             sheet_name = md_file.stem
+
+            # Detect if this is a mermaid artifact
+            is_mermaid_file = (
+                "mermaid" in str(md_file).lower()
+                or md_file.suffix == ".mmd"
+                or md_file.name in ("mermaid_structure.json", "mermaid_parsed.md", "mermaid_raw.mmd")
+            )
 
             try:
                 content = md_file.read_text(encoding="utf-8")
@@ -59,11 +80,21 @@ def scan_markdown_files(project_id: str, project_name: str, input_dirs: list[str
                 content = ""
                 first_lines = ""
 
-            frontmatter = _parse_frontmatter(content)
+            frontmatter = _parse_frontmatter(content) if md_file.suffix == ".md" else {}
             if frontmatter.get("source_file"):
                 sheet_name = sheet_name or md_file.stem
 
+            # For mermaid dirs, set workbook_name to "mermaid"
+            if is_mermaid_file:
+                workbook_name = "mermaid"
+                # Use parent dir name as subgroup (e.g. "flowchart")
+                if md_file.parent.name != "mermaid":
+                    sheet_name = f"{md_file.parent.name}_{md_file.stem}"
+
             sheet_type = _classify_sheet_type(first_lines, sheet_name, content)
+            # Override sheet_type for known mermaid artifacts
+            if is_mermaid_file:
+                sheet_type = "mermaid_flowchart"
 
             has_mermaid = (
                 "```mermaid" in content

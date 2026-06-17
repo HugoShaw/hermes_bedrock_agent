@@ -24,18 +24,29 @@ from .models import ParseResult, SheetImages
 logger = logging.getLogger(__name__)
 
 
-def classify_sheet_type(sheet_name: str) -> str:
+def classify_sheet_type(sheet_name: str, workbook_name: str = "") -> str:
+    """Classify sheet type from sheet tab name and optional workbook name.
+
+    When the sheet tab name is generic (e.g., "sheet_02"), the workbook name
+    is used as a fallback signal for classification.
+    """
+    # Combine sheet name and workbook name for classification signals
+    combined = sheet_name + " " + workbook_name
+
     if "変更履歴" in sheet_name:
         return "change_history"
-    if "API呼出順序" in sheet_name or ("API" in sheet_name and "順序" in sheet_name):
+    if "API呼出順序" in combined or ("API" in combined and "順序" in combined):
         return "flowchart"
-    if "DataSpider開発仕様" in sheet_name or "開発仕様" in sheet_name:
+    # フローチャート (flowchart) in either sheet or workbook name → flowchart type
+    if "フローチャート" in combined:
+        return "flowchart"
+    if "DataSpider開発仕様" in combined or "開発仕様" in combined:
         return "dev_spec"
     if "データ取得条件" in sheet_name:
         return "data_condition"
-    if "マッピングシート" in sheet_name or "マッピング" in sheet_name:
+    if "マッピングシート" in combined or ("マッピング" in combined and "定義書" in combined):
         return "mapping"
-    if "補足事項" in sheet_name or "フローチャート" in sheet_name:
+    if "補足事項" in sheet_name:
         return "supplementary"
     return "generic"
 
@@ -182,10 +193,16 @@ Output the synthesized result in this structure:
 """
 
 
-def _parse_single(client, model_id: str, img_path: str, sheet_type: str, sheet_name: str, workbook_name: str = "") -> tuple[str, dict]:
+def _parse_single(
+    client, model_id: str, img_path: str, sheet_type: str, sheet_name: str,
+    workbook_name: str = "", fallback_model_id: Optional[str] = None,
+) -> tuple[str, dict]:
     prompt = build_prompt(sheet_type, sheet_name, workbook_name=workbook_name)
     img_bytes, media_type = load_for_vlm(img_path, max_dim=7900)
-    return converse_multimodal(client, model_id, [(img_bytes, media_type)], prompt, max_tokens=12000)
+    return converse_multimodal(
+        client, model_id, [(img_bytes, media_type)], prompt,
+        max_tokens=12000, fallback_model_id=fallback_model_id,
+    )
 
 
 def _parse_tiled(
@@ -197,6 +214,7 @@ def _parse_tiled(
     tile_save_dir: Optional[str] = None,
     delay: float = 2.0,
     workbook_name: str = "",
+    fallback_model_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     tile_results: list[dict] = []
     total_usage: dict = {"inputTokens": 0, "outputTokens": 0}
@@ -228,7 +246,10 @@ def _parse_tiled(
         img_bytes, media_type = load_for_vlm(tile_path, max_dim=4000)
 
         try:
-            result, usage = converse_multimodal(client, model_id, [(img_bytes, media_type)], prompt, max_tokens=8000)
+            result, usage = converse_multimodal(
+                client, model_id, [(img_bytes, media_type)], prompt,
+                max_tokens=8000, fallback_model_id=fallback_model_id,
+            )
             total_usage["inputTokens"] += usage.get("inputTokens", 0)
             total_usage["outputTokens"] += usage.get("outputTokens", 0)
             tile_results.append({"tile": Path(tile_path).name, "position": position, "content": result})
@@ -250,7 +271,10 @@ def _parse_tiled(
         logger.info("      Synthesizing %d tiles…", len(tile_results))
         synth_prompt = _tile_synthesis_prompt(sheet_name, sheet_type, tile_results)
         try:
-            synth_text, synth_usage = converse_text(client, model_id, synth_prompt, max_tokens=12000)
+            synth_text, synth_usage = converse_text(
+                client, model_id, synth_prompt, max_tokens=12000,
+                fallback_model_id=fallback_model_id,
+            )
             total_usage["inputTokens"] += synth_usage.get("inputTokens", 0)
             total_usage["outputTokens"] += synth_usage.get("outputTokens", 0)
         except Exception as e:
@@ -297,6 +321,7 @@ def _parse_multi_page(
     sheet_name: str,
     delay: float = 3.0,
     workbook_name: str = "",
+    fallback_model_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """Parse each page of a multi-page sheet PDF separately, then merge results."""
     page_results: list[dict] = []
@@ -317,7 +342,10 @@ def _parse_multi_page(
         img_bytes, media_type = load_for_vlm(page_path, max_dim=7900)
 
         try:
-            result, usage = converse_multimodal(client, model_id, [(img_bytes, media_type)], prompt, max_tokens=12000)
+            result, usage = converse_multimodal(
+                client, model_id, [(img_bytes, media_type)], prompt,
+                max_tokens=12000, fallback_model_id=fallback_model_id,
+            )
             total_usage["inputTokens"] += usage.get("inputTokens", 0)
             total_usage["outputTokens"] += usage.get("outputTokens", 0)
             page_results.append({"page_num": page_num, "total_pages": total_pages, "content": result})
@@ -335,7 +363,10 @@ def _parse_multi_page(
         logger.info("      Synthesizing %d pages…", len(page_results))
         synth_prompt = _page_synthesis_prompt(sheet_name, sheet_type, page_results)
         try:
-            synth_text, synth_usage = converse_text(client, model_id, synth_prompt, max_tokens=12000)
+            synth_text, synth_usage = converse_text(
+                client, model_id, synth_prompt, max_tokens=12000,
+                fallback_model_id=fallback_model_id,
+            )
             total_usage["inputTokens"] += synth_usage.get("inputTokens", 0)
             total_usage["outputTokens"] += synth_usage.get("outputTokens", 0)
         except Exception as e:
@@ -361,7 +392,7 @@ def parse_sheet(
 
     os.makedirs(output_dir, exist_ok=True)
     sheet_name = images.sheet_info.name
-    sheet_type = classify_sheet_type(sheet_name)
+    sheet_type = classify_sheet_type(sheet_name, workbook_name=workbook_name)
     safe_name = f"sheet_{images.sheet_info.index:02d}"
     has_tiles = bool(images.tile_paths)
     is_multi_page = images.page_count > 1 and len(images.page_image_paths) > 1
@@ -370,20 +401,23 @@ def parse_sheet(
                 safe_name, sheet_name, sheet_type, has_tiles,
                 images.page_count, images.rendering_strategy)
 
+    fallback = cfg.vlm_fallback_model_id or None
     if is_multi_page:
         markdown, usage = _parse_multi_page(
             client, cfg.vlm_model_id,
             images.page_image_paths, sheet_type, sheet_name,
             delay=cfg.vlm_delay_seconds,
             workbook_name=workbook_name,
+            fallback_model_id=fallback,
         )
-    elif has_tiles and sheet_type in ("mapping", "flowchart", "dev_spec"):
+    elif has_tiles and sheet_type in ("mapping", "flowchart", "dev_spec", "generic"):
         tile_save_dir = os.path.join(output_dir, f"{safe_name}_tiles")
         markdown, usage = _parse_tiled(
             client, cfg.vlm_model_id,
             images.tile_paths, sheet_type, sheet_name,
             tile_save_dir=tile_save_dir, delay=2.0,
             workbook_name=workbook_name,
+            fallback_model_id=fallback,
         )
     else:
         markdown, usage = _parse_single(
@@ -391,6 +425,7 @@ def parse_sheet(
             images.vlm_ready_path or images.full_image_path,
             sheet_type, sheet_name,
             workbook_name=workbook_name,
+            fallback_model_id=fallback,
         )
 
     md_path = os.path.join(output_dir, f"{safe_name}.md")

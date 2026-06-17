@@ -138,9 +138,9 @@ def link_mermaid_to_excel(
 
         links.append(best_link)
 
-    # Save linkage report
+    # Save linkage report to intermediates/mermaid/ (canonical location)
     if links:
-        report_dir = Path(run_dir) / "mermaid"
+        report_dir = Path(run_dir) / "intermediates" / "mermaid"
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / "linkage_report.json"
         report_path.write_text(

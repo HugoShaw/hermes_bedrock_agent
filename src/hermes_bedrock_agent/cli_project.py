@@ -117,7 +117,15 @@ def parse_files(
     force: bool = typer.Option(False, "--force", help="Re-parse even if already PARSED"),
     log_level: str = typer.Option("INFO", "--log-level", help="Logging level"),
 ) -> None:
-    """Parse project files and update manifest state."""
+    """Parse project files and update manifest state (DEBUG/SINGLE-FILE).
+
+    Intended for debugging single files or incremental re-parse testing.
+    Output is flat markdown without the unified directory structure.
+
+    For production knowledge-base parsing, use:
+      dualrag parse             — Excel/S3 with unified output + frontmatter
+      dualrag project parse-all — Multi-type with role inference + strategy
+    """
     logging.basicConfig(level=getattr(logging, log_level.upper(), logging.INFO))
 
     from .models.document import FileState, SourceType, ProjectManifest

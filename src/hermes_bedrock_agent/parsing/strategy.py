@@ -73,7 +73,7 @@ def select_parser(pf: ProjectFile) -> tuple[str, str]:
         return "skip", f"unknown file type: {pf.relative_path}"
 
     if st == SourceType.PLAINTEXT:
-        return "code", ""
+        return "text", ""
 
     return "skip", f"no parser for source_type={st.value}"
 

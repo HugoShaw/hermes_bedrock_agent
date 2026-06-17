@@ -1,0 +1,19 @@
+HULFT Connect 設定手順
+
+1. HULFT Connectのインストール
+   - JRE 1.8以上が必要
+   - hulft-connect-5.2.1.tar.gzを展開
+
+2. 接続先設定
+   - ホスト名: sap-prod.example.com
+   - ポート: 8443
+   - プロトコル: HTTPS/TLS1.2
+
+3. ジョブ定義
+   - バッチジョブ: 毎朝6:00にCSV抽出
+   - 転送先: s3://bucket/raw/daily/
+   - 圧縮: gzip
+
+4. 障害対応
+   - 転送失敗時は30分後にリトライ
+   - 3回失敗で管理者通知

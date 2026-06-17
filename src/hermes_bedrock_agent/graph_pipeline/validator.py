@@ -16,6 +16,7 @@ def run_preflight_check(
     project_id: str,
     project_name: str,
     inventory: list[dict],
+    registry: dict | None = None,
 ) -> tuple[str, bool]:
     """Comprehensive preflight validation. Returns (report_text, has_p0_blocking_issues)."""
     issues_p0: list[str] = []
@@ -95,12 +96,108 @@ def run_preflight_check(
                 f"Mermaid exists in {len(mermaid_sheets)} sheets but no FlowNode/FunctionModule extracted"
             )
 
+    # P0: Mermaid artifacts exist in inventory but no node/edge has mermaid source_file
+    mermaid_inventory = [
+        f for f in inventory
+        if f.get("sheet_type") == "mermaid_flowchart"
+        or "mermaid" in f.get("file_path", "").lower()
+        or f.get("file_name", "").endswith(".mmd")
+    ]
+    if mermaid_inventory:
+        _mermaid_indicators = ("mermaid/", "mermaid\\", ".mmd", "mermaid_structure.json", "mermaid_parsed.md")
+        mermaid_sourced_nodes = [
+            n for n in nodes
+            if any(ind in n.get("source_file", "") for ind in _mermaid_indicators)
+        ]
+        mermaid_sourced_edges = [
+            e for e in edges
+            if any(ind in e.get("source_file", "") for ind in _mermaid_indicators)
+        ]
+        if not mermaid_sourced_nodes and not mermaid_sourced_edges:
+            issues_p0.append(
+                f"Mermaid artifacts found in inventory ({len(mermaid_inventory)} files) "
+                f"but no graph node or edge has a Mermaid source_file — "
+                f"mermaid extraction was skipped or failed"
+            )
+
     # Pending edge ratio in display graph
     if display_edges:
         pending_display = sum(1 for e in display_edges if e.get("review_status") == "pending")
         if pending_display > len(display_edges) * 0.5:
             issues_p2.append(
                 f"Many pending edges in display graph: {pending_display}/{len(display_edges)}"
+            )
+
+    # ── Edge promotion gates (v4.5 fix) ──────────────────────────────────────
+    # Fail if verified cache relationships are silently lost
+    if registry:
+        diag = registry.get("diagnostics", {})
+        cache_verified = diag.get("cache_verified_edge_type_counts", {})
+        promoted = diag.get("promoted_edge_type_counts", {})
+        unresolved = diag.get("unresolved_endpoint_edge_type_counts", {})
+        silently_dropped = diag.get("silently_dropped_edge_type_counts", {})
+
+        # P0: If silently_dropped_edge_type_counts is non-empty, block import
+        if silently_dropped:
+            issues_p0.append(
+                f"Silently dropped edges detected: {dict(silently_dropped)} — "
+                f"indicates a pipeline bug, not a data issue"
+            )
+
+        # P0: Key verified edge types exist in cache but zero promoted AND zero unresolved
+        _critical_types = {
+            "HAS_FIELD", "MAPS_TO", "HAS_MAPPING_ROW", "HAS_SOURCE_FIELD",
+            "HAS_TARGET_FIELD", "NEXT_STEP", "BRANCHES_TO", "CONTAINS_STEP",
+            "HAS_PROCESS", "HAS_FUNCTION", "HAS_STEP", "HAS_CONDITION",
+            "APPLIES_RULE",
+        }
+        for etype in _critical_types:
+            cache_count = cache_verified.get(etype, 0)
+            promoted_count = promoted.get(etype, 0)
+            unresolved_count = unresolved.get(etype, 0)
+            if cache_count > 0 and promoted_count == 0 and unresolved_count == 0:
+                issues_p0.append(
+                    f"Verified cache edge type '{etype}' has {cache_count} edges in cache "
+                    f"but 0 promoted and 0 unresolved — edges silently lost"
+                )
+
+        # P1: FlowNode/DecisionPoint nodes exist with flow evidence but zero flow edges
+        type_counts_pre = Counter(n.get("entity_type", "Unknown") for n in nodes)
+        flow_node_count = type_counts_pre.get("FlowNode", 0) + type_counts_pre.get("DecisionPoint", 0)
+        flow_edge_types = {"NEXT_STEP", "BRANCHES_TO", "CONTAINS_STEP"}
+        flow_edge_count = sum(promoted.get(t, 0) for t in flow_edge_types)
+        if flow_node_count > 0 and any(cache_verified.get(t, 0) > 0 for t in flow_edge_types):
+            if flow_edge_count == 0:
+                issues_p1.append(
+                    f"FlowNode/DecisionPoint nodes exist ({flow_node_count}) and flow edge "
+                    f"evidence exists in cache, but 0 flow edges promoted"
+                )
+
+        # P1: Mapping nodes exist with mapping evidence but zero mapping edges
+        mapping_node_count = (
+            type_counts_pre.get("MappingDefinition", 0)
+            + type_counts_pre.get("FieldMapping", 0)
+            + type_counts_pre.get("Field", 0)
+            + type_counts_pre.get("FieldDefinition", 0)
+            + type_counts_pre.get("DataEntity", 0)
+        )
+        mapping_edge_types = {"HAS_MAPPING_ROW", "HAS_FIELD", "MAPS_TO", "HAS_SOURCE_FIELD", "HAS_TARGET_FIELD"}
+        mapping_edge_count = sum(promoted.get(t, 0) for t in mapping_edge_types)
+        if mapping_node_count > 0 and any(cache_verified.get(t, 0) > 0 for t in mapping_edge_types):
+            if mapping_edge_count == 0:
+                issues_p1.append(
+                    f"Mapping/Field nodes exist ({mapping_node_count}) and mapping edge "
+                    f"evidence exists in cache, but 0 mapping edges promoted"
+                )
+
+        # Edge resolution summary for report
+        total_cache = diag.get("total_cache_edges", 0)
+        total_promoted = diag.get("total_promoted_edges", 0)
+        total_unresolved = diag.get("total_unresolved_edges", 0)
+        if total_cache > 0 and total_promoted == 0 and total_unresolved == 0:
+            issues_p0.append(
+                f"All {total_cache} cache edges vanished — "
+                f"0 promoted and 0 unresolved. Critical pipeline failure."
             )
 
     # v4.2: Core entity type coverage check
@@ -114,6 +211,39 @@ def run_preflight_check(
         issues_p2.append("Core entity type 'BusinessRule' has zero instances — extraction may be incomplete")
 
     has_p0 = len(issues_p0) > 0
+
+    # Build edge resolution diagnostics section
+    edge_resolution_section = ""
+    if registry:
+        diag = registry.get("diagnostics", {})
+        res_stats = registry.get("edge_resolution_stats", {})
+        total_cache = diag.get("total_cache_edges", 0)
+        total_promoted = diag.get("total_promoted_edges", 0)
+        total_unresolved = diag.get("total_unresolved_edges", 0)
+        cache_verified = diag.get("cache_verified_edge_type_counts", {})
+        promoted_types = diag.get("promoted_edge_type_counts", {})
+        unresolved_types = diag.get("unresolved_endpoint_edge_type_counts", {})
+
+        edge_resolution_section = f"""
+## Edge Promotion Diagnostics
+- Cache edges (total): {total_cache}
+- Cache edges (verified): {sum(cache_verified.values())}
+- Promoted edges: {total_promoted}
+- Unresolved edges: {total_unresolved}
+- Silently dropped: 0
+
+### Resolution Strategy Stats
+{chr(10).join(f'| {k} | {v} |' for k, v in sorted(res_stats.items(), key=lambda x: -x[1]))}
+
+### Cache Verified Edge Types
+{chr(10).join(f'| {t} | {c} |' for t, c in sorted(cache_verified.items(), key=lambda x: -x[1])[:20])}
+
+### Promoted Edge Types
+{chr(10).join(f'| {t} | {c} |' for t, c in sorted(promoted_types.items(), key=lambda x: -x[1])[:20])}
+
+### Unresolved Edge Types
+{chr(10).join(f'| {t} | {c} |' for t, c in sorted(unresolved_types.items(), key=lambda x: -x[1])[:20]) if unresolved_types else '- None'}
+"""
 
     report = f"""# Semantic Map Preflight Check
 ## Project: {project_name} ({project_id})
@@ -136,7 +266,7 @@ def run_preflight_check(
 
 ## P2 Issues (INFO)
 {chr(10).join(f'- ℹ️ {i}' for i in issues_p2) if issues_p2 else '- ✅ None'}
-
+{edge_resolution_section}
 ## Node Type Distribution
 {_fmt_type_dist(nodes)}
 

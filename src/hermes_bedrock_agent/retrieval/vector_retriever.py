@@ -46,6 +46,15 @@ def retrieve_chunks(
             source_excel_s3_path=row.get("source_excel_s3_path", ""),
             project_id=row.get("project_id", project_id),
             parsed_markdown_path=row.get("parsed_markdown_path", ""),
+            document_id=row.get("document_id", ""),
+            document_name=row.get("document_name", ""),
+            document_type=row.get("document_type", ""),
+            source_markdown_file=row.get("source_markdown_file", ""),
+            evidence_path=row.get("evidence_path", ""),
+            evidence_paths=str(row.get("evidence_paths", "")),
+            source_file=row.get("source_file", ""),
+            source_type=row.get("source_type", ""),
+            parser_type=row.get("parser_type", ""),
         ))
 
     if trace is not None:

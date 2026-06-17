@@ -14,6 +14,35 @@ from .schemas import Chunk
 
 logger = logging.getLogger(__name__)
 
+
+def _make_chunk_id(
+    *,
+    document_id: str,
+    source_type: str,
+    unit_label: str,
+    chunk_index: int,
+    content_hash: str,
+) -> str:
+    """Generate a deterministic, provenance-aware chunk ID.
+
+    Format: {source_type}_{document_id}_{unit_label}_c{chunk_index:03d}_{content_hash}
+
+    Args:
+        document_id: Stable hash of the source document (from frontmatter).
+        source_type: e.g. "excel", "csv", "mermaid".
+        unit_label: Human-readable unit within the document.
+            For sheets: "s01", "s02", etc.
+            For single-file docs: "doc"
+            For cross-sheet summaries: "cross"
+        chunk_index: 0-based index within the unit's chunk sequence.
+        content_hash: First 12 chars of SHA-256 of chunk text (for debugging).
+
+    The combination (document_id + unit_label + chunk_index) is unique within a
+    project. content_hash is appended for human debugging only (not relied upon
+    for uniqueness).
+    """
+    return f"{source_type}_{document_id}_{unit_label}_c{chunk_index:03d}_{content_hash}"
+
 _CHUNK_TYPE_RULES: list[tuple[str, list[str]]] = [
     ("flowchart", ["flowchart", "フローチャート", "API呼出順序", "api call", "sequence", "flow"]),
     ("data_condition", ["データ取得条件", "data condition", "取得条件", "where clause", "抽出条件"]),
@@ -143,7 +172,10 @@ def _split_oversized(text: str, max_size: int, min_size: int, header: str) -> li
         return ct.strip()
 
     paragraphs = re.split(r"\n\n+", text)
-    use_lines = len(paragraphs) <= 2 and len(text) > max_size
+    # Fall back to line-level splitting if any single paragraph + prefix exceeds max_size
+    # or if there are too few paragraphs to split meaningfully
+    any_para_oversized = any(len(p) + plen > max_size for p in paragraphs)
+    use_lines = (len(paragraphs) <= 2 and len(text) > max_size) or any_para_oversized
     items = text.split("\n") if use_lines else [p.strip() for p in paragraphs if p.strip()]
     joiner = "\n" if use_lines else "\n\n"
 
@@ -163,6 +195,12 @@ def _split_oversized(text: str, max_size: int, min_size: int, header: str) -> li
     if cur:
         result = _emit(cur, joiner)
         if len(result) >= min_size:
+            # If final chunk exceeds max_size (edge case: prefix + remaining lines > limit
+            # after the last flush), drop the prefix to stay within ceiling.
+            if len(result) > max_size and prefix:
+                result_no_prefix = joiner.join(cur).strip()
+                if len(result_no_prefix) <= max_size:
+                    result = result_no_prefix
             chunks.append(result)
     return chunks
 
@@ -187,6 +225,11 @@ def _split_semantic(markdown: str, max_size: int, min_size: int, target: int = 0
 
     def add(content: str):
         nonlocal buf, buf_size
+        # If a single block exceeds max_size, flush current buffer then split it
+        if len(content) > sem_max:
+            flush()
+            chunks.extend(_split_oversized(content, sem_max, min_size, section_hdr))
+            return
         if section_hdr and not buf and not content.startswith(("## ", "# ")):
             buf.append(section_hdr); buf_size = len(section_hdr) + 2
         if buf and (buf_size + len(content) + 2) > target:
@@ -339,7 +382,12 @@ def build_chunks(
         if not md_path.exists():
             continue
         sheet_name = sheet_mapping.get(sheet_1, {}).get("original_sheet_name", f"sheet_{nn}")
-        markdown = md_path.read_text(encoding="utf-8")
+        raw_markdown = md_path.read_text(encoding="utf-8")
+        if not raw_markdown.strip():
+            continue
+
+        # Strip YAML frontmatter — content only goes to chunks
+        _fm, markdown = _parse_frontmatter(raw_markdown)
         if not markdown.strip():
             continue
 
@@ -354,7 +402,13 @@ def build_chunks(
             field_codes = _extract_field_codes(chunk_text)
             section_name = _extract_section_name(chunk_text)
             content_hash = hashlib.sha256(chunk_text.encode()).hexdigest()[:12]
-            chunk_id = f"sheet{nn}_chunk{i:03d}_{content_hash}"
+            chunk_id = _make_chunk_id(
+                document_id=project_id,  # legacy path: no doc-level id, use project
+                source_type="excel",
+                unit_label=f"s{nn}",
+                chunk_index=i,
+                content_hash=content_hash,
+            )
             systems_str = ", ".join(systems) if systems else ""
             embedding_text = f"シート: {sheet_name} | タイプ: {chunk_type} | システム: {systems_str}\n\n{chunk_text}"
             all_chunks.append(Chunk(
@@ -374,7 +428,13 @@ def build_chunks(
         cross_chunks = _split_into_chunks(cross_text, max_chars, min_chars, mode=mode, target=target_chars)
         for i, chunk_text in enumerate(cross_chunks):
             content_hash = hashlib.sha256(chunk_text.encode()).hexdigest()[:12]
-            chunk_id = f"cross_chunk{i:03d}_{content_hash}"
+            chunk_id = _make_chunk_id(
+                document_id=project_id,  # legacy path
+                source_type="excel",
+                unit_label="cross",
+                chunk_index=i,
+                content_hash=content_hash,
+            )
             systems = _extract_systems(chunk_text)
             apis = _extract_apis(chunk_text)
             field_codes = _extract_field_codes(chunk_text)
@@ -404,18 +464,33 @@ def build_chunks(
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Extract YAML frontmatter and body from markdown."""
+    """Extract YAML frontmatter and body from markdown.
+
+    Returns (frontmatter_dict, body_text). If frontmatter is absent or
+    malformed, returns ({}, original_text) with a warning for malformed cases.
+    """
     if text.startswith("---\n"):
         end = text.find("\n---\n", 4)
         if end > 0:
             import yaml
-            fm = yaml.safe_load(text[4:end])
-            body = text[end + 5:].lstrip("\n")
-            return fm or {}, body
+            try:
+                fm = yaml.safe_load(text[4:end])
+                if not isinstance(fm, dict):
+                    logger.warning("Frontmatter parsed but is not a dict (got %s), treating as no frontmatter", type(fm).__name__)
+                    return {}, text
+                body = text[end + 5:].lstrip("\n")
+                return fm, body
+            except yaml.YAMLError as e:
+                logger.warning("Malformed YAML frontmatter, skipping: %s", e)
+                return {}, text
     return {}, text
 
 
 _SINGLE_CHUNK_TYPES = {"images", "mermaid"}
+
+# Legacy directory name for backward compatibility: if "docs" exists, it is
+# treated as a valid parsed subdirectory (from pre-normalization runs).
+_LEGACY_SUBDIRS = {"docs"}
 
 
 def build_chunks_from_parsed_dir(
@@ -424,11 +499,16 @@ def build_chunks_from_parsed_dir(
     output_path: Optional[Path] = None,
     cfg: Optional[Config] = None,
 ) -> list[Chunk]:
-    """Build chunks from the new standardized parsed/ directory.
+    """Build chunks from the standardized parsed/ directory.
 
-    Scans parsed/docs/, parsed/csv/, parsed/images/, parsed/code/,
-    parsed/excel/, parsed/mermaid/ subdirectories.
+    Scans parsed/excel/, parsed/mermaid/, parsed/csv/, parsed/code/,
+    parsed/pdf/, parsed/docx/, parsed/html/, parsed/txt/, parsed/images/
+    subdirectories. Also supports legacy parsed/docs/ for backward compat.
     Reads YAML frontmatter for metadata. Applies semantic chunking to all types.
+
+    When cfg.chunk_strategy_enabled is True, uses the ChunkingStrategyRegistry
+    to select a type-aware strategy for each document. When False (default),
+    uses the original inline logic for identical output.
     """
     cfg = cfg or _default_config
     all_chunks: list[Chunk] = []
@@ -436,6 +516,20 @@ def build_chunks_from_parsed_dir(
     max_chars = cfg.chunk_semantic_max_chars if mode == "semantic" else cfg.chunk_max_chars
     min_chars = cfg.chunk_min_chars
     target_chars = cfg.chunk_semantic_group_target
+    use_strategies = cfg.chunk_strategy_enabled
+
+    # Lazy-import strategy registry only when enabled (avoid import cost when off)
+    strategy_registry = None
+    if use_strategies:
+        from .chunker_strategies import ChunkConfig, ChunkMetadata, select_strategy
+        strategy_registry = True  # flag that registry is loaded
+        chunk_config = ChunkConfig(
+            max_chars=max_chars,
+            min_chars=min_chars,
+            target_chars=target_chars,
+            mode=mode,
+        )
+        logger.info("Chunking strategy dispatch ENABLED")
 
     for subdir in sorted(parsed_dir.iterdir()):
         if not subdir.is_dir():
@@ -451,51 +545,193 @@ def build_chunks_from_parsed_dir(
             if not body.strip():
                 continue
 
+            # Extract all frontmatter fields for chunk metadata
             source_file = frontmatter.get("source_file", "")
             source_type = frontmatter.get("source_type", type_name)
             parser_type = frontmatter.get("parser_type", "")
             document_role = frontmatter.get("document_role", "")
-            content_hash_fm = frontmatter.get("content_hash", "")
+            document_id = frontmatter.get("document_id", "")
+            document_name = frontmatter.get("document_name", "")
+            document_type = frontmatter.get("document_type", "")
+            display_name_fm = frontmatter.get("display_name", "")
+            unit_type = frontmatter.get("unit_type", "")
+            original_relative_path = frontmatter.get("original_relative_path", "")
+            parser_version = frontmatter.get("parser_version", "")
+            evidence_path = frontmatter.get("evidence_path", "")
+            evidence_paths_fm = frontmatter.get("evidence_paths", [])
+            if isinstance(evidence_paths_fm, str):
+                evidence_paths_fm = [evidence_paths_fm]
+            fm_workbook_name = frontmatter.get("workbook_name", "")
+            fm_sheet_index = frontmatter.get("sheet_index", 0)
+            fm_sheet_name = frontmatter.get("sheet_name", "")
+            fm_project_id = frontmatter.get("project_id", "")
 
-            if type_name in _SINGLE_CHUNK_TYPES:
-                text_chunks = [body.strip()]
-            else:
-                text_chunks = _split_into_chunks(body, max_chars, min_chars, mode=mode, target=target_chars)
-
-            for i, chunk_text in enumerate(text_chunks):
-                chunk_type = _infer_chunk_type(chunk_text)
-                systems = _extract_systems(chunk_text)
-                apis = _extract_apis(chunk_text)
-                fields = _extract_fields(chunk_text)
-                field_codes = _extract_field_codes(chunk_text)
-                section_name = _extract_section_name(chunk_text)
-                content_hash = hashlib.sha256(chunk_text.encode()).hexdigest()[:12]
-                chunk_id = f"{type_name}_{md_file.stem}_chunk{i:03d}_{content_hash}"
-                systems_str = ", ".join(systems) if systems else ""
-                embedding_text = (
-                    f"ソース: {source_file or md_file.stem} | タイプ: {chunk_type} | "
-                    f"システム: {systems_str}\n\n{chunk_text}"
+            # Safety: if both CLI project_id and frontmatter project_id are set
+            # and they differ, fail with a clear error to prevent data contamination.
+            if project_id and fm_project_id and fm_project_id != project_id:
+                raise ValueError(
+                    f"project_id mismatch: CLI --project-id='{project_id}' but "
+                    f"frontmatter in {md_file.name} has project_id='{fm_project_id}'. "
+                    f"This may indicate data from a different project. "
+                    f"Either fix the frontmatter or use the correct --project-id."
                 )
-                all_chunks.append(Chunk(
-                    chunk_id=chunk_id,
-                    content=chunk_text,
-                    chunk_type=chunk_type,
+            # Resolve: CLI wins as explicit override; frontmatter used only when CLI is empty
+            effective_pid = project_id or fm_project_id
+
+            # ── Strategy-based chunking (opt-in) ──────────────────────────
+            if use_strategies:
+                meta = ChunkMetadata(
                     source_file=source_file,
                     source_type=source_type,
-                    parser_type=parser_type,
+                    document_type=document_type,
                     document_role=document_role,
-                    project_id=project_id,
-                    content_hash=content_hash,
-                    source_markdown_file=str(md_file),
-                    chunk_mode=mode,
-                    section_name=section_name,
-                    workbook_name=type_name,
-                    systems=systems,
-                    apis=apis,
-                    fields=fields,
-                    field_codes=field_codes,
-                    embedding_text=embedding_text,
-                ))
+                    parser_type=parser_type,
+                    unit_type=unit_type,
+                    document_name=document_name,
+                    document_id=document_id,
+                    project_id=effective_pid,
+                    display_name=display_name_fm,
+                    parser_version=parser_version,
+                    parsed_subdir=type_name,
+                    filename=md_file.name,
+                    workbook_name=fm_workbook_name,
+                    sheet_name=fm_sheet_name,
+                    sheet_index=fm_sheet_index if isinstance(fm_sheet_index, int) else 0,
+                )
+                strategy = select_strategy(meta)
+                chunk_results = strategy.chunk(body, meta, chunk_config)
+
+                for i, cr in enumerate(chunk_results):
+                    chunk_text = cr.text
+                    # Use strategy-provided values or fall back to extractors
+                    systems = cr.systems if cr.systems else _extract_systems(chunk_text)
+                    apis = cr.apis if cr.apis else _extract_apis(chunk_text)
+                    fields = cr.fields if cr.fields else _extract_fields(chunk_text)
+                    field_codes = cr.field_codes if cr.field_codes else _extract_field_codes(chunk_text)
+                    section_name = cr.section_name or _extract_section_name(chunk_text)
+                    chunk_type = cr.chunk_type
+                    content_hash = hashlib.sha256(chunk_text.encode()).hexdigest()[:12]
+                    # Derive unit_label from sheet info or filename
+                    if fm_sheet_name and fm_sheet_name.startswith("sheet_"):
+                        _snum = fm_sheet_name.replace("sheet_", "")
+                        unit_label = f"s{_snum}"
+                    elif fm_sheet_name:
+                        unit_label = fm_sheet_name[:20]
+                    else:
+                        unit_label = "doc"
+                    chunk_id = _make_chunk_id(
+                        document_id=document_id,
+                        source_type=source_type or type_name,
+                        unit_label=unit_label,
+                        chunk_index=i,
+                        content_hash=content_hash,
+                    )
+                    # Use strategy embedding_text if provided, else build default
+                    if cr.embedding_text:
+                        embedding_text = cr.embedding_text
+                    else:
+                        systems_str = ", ".join(systems) if systems else ""
+                        embedding_text = (
+                            f"ソース: {source_file or md_file.stem} | タイプ: {chunk_type} | "
+                            f"システム: {systems_str}\n\n{chunk_text}"
+                        )
+                    all_chunks.append(Chunk(
+                        chunk_id=chunk_id,
+                        content=chunk_text,
+                        chunk_type=chunk_type,
+                        source_file=source_file,
+                        source_type=source_type,
+                        parser_type=parser_type,
+                        document_role=document_role,
+                        document_id=document_id,
+                        document_name=document_name,
+                        document_type=document_type,
+                        display_name=display_name_fm,
+                        unit_type=unit_type,
+                        original_relative_path=original_relative_path,
+                        parser_version=parser_version,
+                        evidence_path=evidence_path,
+                        evidence_paths=evidence_paths_fm,
+                        project_id=effective_pid,
+                        content_hash=content_hash,
+                        source_markdown_file=str(md_file),
+                        chunk_mode=mode,
+                        section_name=section_name,
+                        workbook_name=fm_workbook_name or type_name,
+                        sheet_index=fm_sheet_index if isinstance(fm_sheet_index, int) else 0,
+                        sheet_name=fm_sheet_name,
+                        systems=systems,
+                        apis=apis,
+                        fields=fields,
+                        field_codes=field_codes,
+                        embedding_text=embedding_text,
+                    ))
+            else:
+                # ── Original code path (unchanged behavior) ───────────────
+                if type_name in _SINGLE_CHUNK_TYPES:
+                    text_chunks = [body.strip()]
+                else:
+                    text_chunks = _split_into_chunks(body, max_chars, min_chars, mode=mode, target=target_chars)
+
+                for i, chunk_text in enumerate(text_chunks):
+                    chunk_type = _infer_chunk_type(chunk_text)
+                    systems = _extract_systems(chunk_text)
+                    apis = _extract_apis(chunk_text)
+                    fields = _extract_fields(chunk_text)
+                    field_codes = _extract_field_codes(chunk_text)
+                    section_name = _extract_section_name(chunk_text)
+                    content_hash = hashlib.sha256(chunk_text.encode()).hexdigest()[:12]
+                    # Derive unit_label from sheet info or filename
+                    if fm_sheet_name and fm_sheet_name.startswith("sheet_"):
+                        _snum = fm_sheet_name.replace("sheet_", "")
+                        unit_label = f"s{_snum}"
+                    elif fm_sheet_name:
+                        unit_label = fm_sheet_name[:20]
+                    else:
+                        unit_label = "doc"
+                    chunk_id = _make_chunk_id(
+                        document_id=document_id,
+                        source_type=source_type or type_name,
+                        unit_label=unit_label,
+                        chunk_index=i,
+                        content_hash=content_hash,
+                    )
+                    systems_str = ", ".join(systems) if systems else ""
+                    embedding_text = (
+                        f"ソース: {source_file or md_file.stem} | タイプ: {chunk_type} | "
+                        f"システム: {systems_str}\n\n{chunk_text}"
+                    )
+                    all_chunks.append(Chunk(
+                        chunk_id=chunk_id,
+                        content=chunk_text,
+                        chunk_type=chunk_type,
+                        source_file=source_file,
+                        source_type=source_type,
+                        parser_type=parser_type,
+                        document_role=document_role,
+                        document_id=document_id,
+                        document_name=document_name,
+                        document_type=document_type,
+                        display_name=display_name_fm,
+                        unit_type=unit_type,
+                        original_relative_path=original_relative_path,
+                        parser_version=parser_version,
+                        evidence_path=evidence_path,
+                        evidence_paths=evidence_paths_fm,
+                        project_id=effective_pid,
+                        content_hash=content_hash,
+                        source_markdown_file=str(md_file),
+                        chunk_mode=mode,
+                        section_name=section_name,
+                        workbook_name=fm_workbook_name or type_name,
+                        sheet_index=fm_sheet_index if isinstance(fm_sheet_index, int) else 0,
+                        sheet_name=fm_sheet_name,
+                        systems=systems,
+                        apis=apis,
+                        fields=fields,
+                        field_codes=field_codes,
+                        embedding_text=embedding_text,
+                    ))
 
         logger.info("parsed/%s: %d chunks",
                     type_name,

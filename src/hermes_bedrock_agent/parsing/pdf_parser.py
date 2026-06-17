@@ -87,7 +87,20 @@ def render_pdf_to_image(
     vlm_img.save(vlm_path, format="PNG")
 
     tile_paths: list[str] = []
-    if page_count == 1 and needs_tiling(img, max_dim=4000):
+    # Tile when image is very large OR when sheet has shapes on large paper
+    # (A0/A1 flowcharts need tiling even at 3000-4000px because text is dense)
+    should_tile = needs_tiling(img, max_dim=4000)
+    if not should_tile and sheet_pdf.sheet_info.has_shapes:
+        # Force tiling for shape-heavy sheets on large paper (A1+: width > 1500pt ≈ 530mm)
+        pw_pt = sheet_pdf.sheet_info.page_width_pt
+        ph_pt = sheet_pdf.sheet_info.page_height_pt
+        max_pt = max(pw_pt, ph_pt)
+        if max_pt > 1500:  # A1 and larger
+            should_tile = True
+            logger.info("    Forcing tiling: has_shapes=True, paper=%.0fx%.0f pt (large format)",
+                        pw_pt, ph_pt)
+
+    if page_count == 1 and should_tile:
         tile_dir = os.path.join(output_dir, "tiles", safe_name)
         tile_paths = generate_tiles(
             img,

@@ -52,14 +52,13 @@ def retrieve(
         graph_context = dual_graph.to_merged_context() if dual_graph else None
         logger.info("Graph guidance status: %s", guidance_status)
     else:
-        # No graph: plain vector retrieval
-        from .graph_guided_retrieval import _keyword_boost_chunks
-        chunks = retrieve_chunks(
-            query, top_k=top_k, cfg=cfg,
-            store_path=store_path, collection=collection, project_id=project_id,
+        # No graph: hybrid retrieval (vector + keyword search)
+        from .hybrid_retriever import hybrid_retrieve
+        result = hybrid_retrieve(
+            query, top_k=top_k, project_id=project_id, cfg=cfg,
+            store_path=store_path, collection=collection,
         )
-        # Apply keyword boost even without graph (helps exact-text queries)
-        chunks = _keyword_boost_chunks(chunks, query)
+        chunks = result.chunks
         graph_context = None
         guidance_status = "disabled"
 

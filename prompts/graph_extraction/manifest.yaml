@@ -26,4 +26,22 @@ versions:
     description: "Document-level extraction with improved entity types and edge coverage."
     created_at: "2025-06-08"
 
+  v4.5:
+    name: "V4.5 Universal Semantic Map with Canonicalization"
+    file: "v45_semantic_map.md"
+    scope: document
+    adapter: document_to_chunk
+    status: deprecated
+    description: "Document-level extraction v4.5 (superseded by v4.5.1). Do not use for new extractions."
+    created_at: "2025-06-15"
+
+  v4.5.1:
+    name: "V4.5.1 Final with External Rules"
+    file: "v451_semantic_map.md"
+    scope: document
+    adapter: document_to_chunk
+    status: experimental
+    description: "Document-level extraction v4.5.1 final with external extraction rules, strict ID/endpoint contract, edge promotion diagnostics, and mandatory relationship coverage triggers."
+    created_at: "2025-06-17"
+
 default: v4.3

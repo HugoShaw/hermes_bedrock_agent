@@ -489,7 +489,6 @@ def _rows_to_retrieved_chunks(raw_results: list[dict], fallback_project_id: str)
     chunks: list[RetrievedChunk] = []
     for row in raw_results:
         distance = row.get("_distance", 0.0)
-        # Use inverse distance for scoring: 1/(1+d) gives [0, 1] range for any L2 distance
         score = 1.0 / (1.0 + distance)
         chunks.append(RetrievedChunk(
             chunk_id=row.get("id", ""),
@@ -501,8 +500,44 @@ def _rows_to_retrieved_chunks(raw_results: list[dict], fallback_project_id: str)
             source_pdf_s3_path=row.get("source_pdf_s3_path", ""),
             source_excel_s3_path=row.get("source_excel_s3_path", ""),
             project_id=row.get("project_id", fallback_project_id),
+            parsed_markdown_path=row.get("parsed_markdown_path", ""),
+            document_id=row.get("document_id", ""),
+            document_name=row.get("document_name", ""),
+            document_type=row.get("document_type", ""),
+            source_markdown_file=row.get("source_markdown_file", ""),
+            evidence_path=row.get("evidence_path", ""),
+            evidence_paths=str(row.get("evidence_paths", "")),
+            source_file=row.get("source_file", ""),
+            source_type=row.get("source_type", ""),
+            parser_type=row.get("parser_type", ""),
         ))
     return chunks
+
+
+def _row_to_chunk_from_keyword(row: dict, fallback_project_id: str) -> RetrievedChunk:
+    """Convert a keyword search result row to RetrievedChunk with full provenance."""
+    score = row.get("_keyword_score", 0.0)
+    return RetrievedChunk(
+        chunk_id=row.get("id", ""),
+        content=row.get("text", ""),
+        chunk_type=row.get("chunk_type", ""),
+        sheet_index=row.get("sheet_index", 0),
+        sheet_name=row.get("sheet_name", ""),
+        score=round(score, 4),
+        source_pdf_s3_path=row.get("source_pdf_s3_path", ""),
+        source_excel_s3_path=row.get("source_excel_s3_path", ""),
+        project_id=row.get("project_id", fallback_project_id),
+        parsed_markdown_path=row.get("parsed_markdown_path", ""),
+        document_id=row.get("document_id", ""),
+        document_name=row.get("document_name", ""),
+        document_type=row.get("document_type", ""),
+        source_markdown_file=row.get("source_markdown_file", ""),
+        evidence_path=row.get("evidence_path", ""),
+        evidence_paths=str(row.get("evidence_paths", "")),
+        source_file=row.get("source_file", ""),
+        source_type=row.get("source_type", ""),
+        parser_type=row.get("parser_type", ""),
+    )
 
 
 def _keyword_boost_chunks(
@@ -548,17 +583,7 @@ def _keyword_boost_chunks(
         if matches > 0:
             boost = min(0.08, matches * 0.02)
             new_score = min(1.0, chunk.score + boost)
-            boosted.append(RetrievedChunk(
-                chunk_id=chunk.chunk_id,
-                content=chunk.content,
-                chunk_type=chunk.chunk_type,
-                sheet_index=chunk.sheet_index,
-                sheet_name=chunk.sheet_name,
-                score=round(new_score, 4),
-                source_pdf_s3_path=chunk.source_pdf_s3_path,
-                source_excel_s3_path=chunk.source_excel_s3_path,
-                project_id=chunk.project_id,
-            ))
+            boosted.append(chunk.model_copy(update={"score": round(new_score, 4)}))
             if trace is not None:
                 matched_kws = [kw for kw in keywords if kw.lower() in content_lower]
                 trace.keyword_boost_applied.append({
@@ -603,11 +628,26 @@ def retrieve_with_graph_guidance(
     """
     from .graph_retriever import fetch_dual_graph_context
     from .vector_retriever import retrieve_chunks
+    from .query_preprocessing import normalize_query, detect_intent, rewrite_queries
+    from .keyword_retriever import keyword_search
     from ..knowledge_base.vector_store import query_vector_store
 
     cfg = cfg or _default_config
 
-    # Step 1: Graph exploration
+    # Hybrid preprocessing: normalize, detect intent, rewrite queries
+    normalized = normalize_query(query)
+    intent = detect_intent(normalized)
+    rewritten = rewrite_queries(normalized, intent)
+
+    if trace is not None:
+        trace.hybrid.normalized_query = normalized
+        trace.hybrid.intent_label = intent.label
+        trace.hybrid.intent_confidence = intent.confidence
+        trace.hybrid.business_query = rewritten.business_query
+        trace.hybrid.technical_query = rewritten.technical_query
+        trace.hybrid.keyword_query = rewritten.keyword_query
+
+    # Step 1: Graph exploration (uses ORIGINAL query for entity matching)
     try:
         with Timer() as graph_explore_timer:
             hints = explore_graph_for_query(query, project_id=project_id)
@@ -625,7 +665,7 @@ def retrieve_with_graph_guidance(
         trace.graph.hint_quality = hints.quality
         if hints.quality == "weak":
             sheet_count = len(hints.relevant_sheet_indices)
-            trace.graph.hint_quality_reason = f"over-broad: {sheet_count} sheets"
+            trace.graph.hint_quality_reason = "over-broad: {} sheets".format(sheet_count)
         elif hints.quality == "none":
             trace.graph.hint_quality_reason = "no graph nodes matched query terms"
         else:
@@ -635,6 +675,7 @@ def retrieve_with_graph_guidance(
     guidance_status = hints.quality
 
     # Step 3: Vector retrieval strategy based on hint quality
+    # Uses NORMALIZED query for better embedding similarity
     if guidance_status == "strong":
         logger.info(
             "Graph-guided retrieval: STRONG hints — sheets=%s systems=%s",
@@ -643,7 +684,7 @@ def retrieve_with_graph_guidance(
         try:
             with Timer() as vec_timer:
                 filtered_raw = query_vector_store(
-                    query_text=query,
+                    query_text=normalized,
                     cfg=cfg,
                     top_k=top_k,
                     project_id=project_id,
@@ -657,7 +698,7 @@ def retrieve_with_graph_guidance(
             vec_timer = Timer()
 
         with Timer() as std_timer:
-            standard_chunks = retrieve_chunks(query=query, top_k=top_k, cfg=cfg, project_id=project_id)
+            standard_chunks = retrieve_chunks(query=normalized, top_k=top_k, cfg=cfg, project_id=project_id)
         chunks = _merge_chunks(guided_chunks, standard_chunks, guided_boost=0.05)
         if trace is not None:
             trace.timing.vector_search_ms = vec_timer.elapsed_ms + std_timer.elapsed_ms
@@ -670,7 +711,7 @@ def retrieve_with_graph_guidance(
         )
         with Timer() as vec_timer:
             chunks = retrieve_chunks(
-                query=query, top_k=top_k, cfg=cfg, project_id=project_id,
+                query=normalized, top_k=top_k, cfg=cfg, project_id=project_id,
                 trace=trace.vector if trace else None,
             )
         if trace is not None:
@@ -680,11 +721,49 @@ def retrieve_with_graph_guidance(
         logger.info("No graph hints available — using standard vector retrieval")
         with Timer() as vec_timer:
             chunks = retrieve_chunks(
-                query=query, top_k=top_k, cfg=cfg, project_id=project_id,
+                query=normalized, top_k=top_k, cfg=cfg, project_id=project_id,
                 trace=trace.vector if trace else None,
             )
         if trace is not None:
             trace.timing.vector_search_ms = vec_timer.elapsed_ms
+
+    # Step 3b: Keyword retrieval and merge
+    with Timer() as kw_timer:
+        keyword_raw = keyword_search(
+            query=rewritten.keyword_query,
+            top_k=top_k * 2,
+            project_id=project_id,
+            cfg=cfg,
+        )
+        keyword_chunks = [
+            _row_to_chunk_from_keyword(row, project_id)
+            for row in keyword_raw
+        ]
+
+    if trace is not None:
+        trace.hybrid.keyword_hits_count = len(keyword_chunks)
+
+    # Merge keyword results into vector results
+    if keyword_chunks:
+        seen_ids = {c.chunk_id for c in chunks}
+        dedup_removed = 0
+        for kw_chunk in keyword_chunks:
+            kw_score = kw_chunk.score * 0.9
+            if kw_chunk.chunk_id in seen_ids:
+                dedup_removed += 1
+                existing = next((c for c in chunks if c.chunk_id == kw_chunk.chunk_id), None)
+                if existing and kw_score > existing.score:
+                    chunks = [
+                        kw_chunk.model_copy(update={"score": round(kw_score, 4)})
+                        if c.chunk_id == kw_chunk.chunk_id else c
+                        for c in chunks
+                    ]
+            else:
+                chunks.append(kw_chunk.model_copy(update={"score": round(kw_score, 4)}))
+                seen_ids.add(kw_chunk.chunk_id)
+        chunks = sorted(chunks, key=lambda c: c.score, reverse=True)
+        if trace is not None:
+            trace.hybrid.dedup_removed = dedup_removed
 
     # Step 4: Keyword boost — helps exact-text and keyword-heavy queries
     with Timer() as boost_timer:
@@ -693,7 +772,38 @@ def retrieve_with_graph_guidance(
         elif trace is not None:
             trace.vector.keyword_boost_skipped = True
     if trace is not None:
-        trace.timing.merge_boost_ms = boost_timer.elapsed_ms
+        trace.timing.merge_boost_ms = boost_timer.elapsed_ms + kw_timer.elapsed_ms
+
+    # Step 4b: Optional reranking (after keyword boost, before graph context build)
+    from .reranker import load_rerank_config, rerank_chunks
+    from .trace import RerankTrace, Timer as _Timer
+    rerank_cfg = load_rerank_config()
+    if rerank_cfg.enabled and chunks:
+        chunks_before_rerank = list(chunks)
+        with _Timer() as rerank_timer:
+            rerank_result = rerank_chunks(
+                query=query, chunks=chunks, rerank_cfg=rerank_cfg, cfg=cfg,
+            )
+        chunks = rerank_result.chunks
+        if trace is not None:
+            trace.rerank.enabled = True
+            trace.rerank.model_id = rerank_cfg.model_id
+            trace.rerank.candidate_count = len(chunks_before_rerank)
+            trace.rerank.final_count = len(rerank_result.chunks)
+            trace.rerank.reranked = rerank_result.reranked
+            trace.rerank.error = rerank_result.error
+            trace.rerank.latency_ms = rerank_timer.elapsed_ms
+            pre_order = {cid: rank for rank, cid in enumerate(rerank_result.original_order, 1)}
+            for post_rank, chunk in enumerate(rerank_result.chunks, 1):
+                trace.rerank.rank_comparison.append({
+                    "chunk_id": chunk.chunk_id,
+                    "document_name": chunk.document_name,
+                    "chunk_type": chunk.chunk_type,
+                    "hybrid_rank": pre_order.get(chunk.chunk_id, 0),
+                    "rerank_rank": post_rank,
+                    "hybrid_score": round(chunks_before_rerank[pre_order.get(chunk.chunk_id, 1) - 1].score, 4) if pre_order.get(chunk.chunk_id) else 0.0,
+                    "rerank_score": rerank_result.rerank_scores.get(chunk.chunk_id, 0.0),
+                })
 
     if not chunks:
         return [], None, guidance_status
@@ -759,23 +869,10 @@ def _merge_chunks(
     seen: dict[str, RetrievedChunk] = {}
 
     for chunk in guided:
-        # Only boost if this chunk is unique to the guided set
         if chunk.chunk_id not in standard_ids:
             boosted = min(1.0, chunk.score + guided_boost)
-            seen[chunk.chunk_id] = RetrievedChunk(
-                chunk_id=chunk.chunk_id,
-                content=chunk.content,
-                chunk_type=chunk.chunk_type,
-                sheet_index=chunk.sheet_index,
-                sheet_name=chunk.sheet_name,
-                score=round(boosted, 4),
-                source_pdf_s3_path=chunk.source_pdf_s3_path,
-                source_excel_s3_path=chunk.source_excel_s3_path,
-                project_id=chunk.project_id,
-            )
+            seen[chunk.chunk_id] = chunk.model_copy(update={"score": round(boosted, 4)})
         else:
-            # Chunk exists in both — take guided score (usually higher due to
-            # more focused search space) but no artificial boost
             seen[chunk.chunk_id] = chunk
 
     for chunk in standard:

@@ -124,6 +124,7 @@ class _Session:
         self.graph_confidence_threshold: float = 0.0
         self.disable_keyword_boost: bool = False
         self.vector_only: bool = False
+        self.rerank_override: Optional[bool] = None
         self.last_trace: Optional["RetrievalTrace"] = None
 
 
@@ -457,6 +458,7 @@ def _cmd_help() -> None:
         ("/verbose",                      "Toggle full chunk content display"),
         ("/evidence",                     "Toggle evidence image loading"),
         ("/trace",                        "Toggle full retrieval trace"),
+        ("/rerank [on|off]",              "Toggle reranking (Bedrock rerank-v1)"),
         ("/vector-only",                  "Toggle vector-only mode (skip graph)"),
         ("/isolation",                    "Show last isolation check status"),
         ("/history",                      "Show recent query history"),
@@ -529,20 +531,87 @@ def _cmd_sheet(idx: int, s: _Session) -> None:
     print()
 
 
+def _print_rerank_trace(trace) -> None:
+    """Print reranking trace details."""
+    print(_divider("Rerank", "─", BCYAN))
+    enabled_str = "true" if trace.enabled else "false"
+    print("  Enabled: {} | Model: {}".format(
+        _c(enabled_str, BGREEN if trace.enabled else DIM), trace.model_id or "(none)"))
+    if not trace.enabled:
+        print()
+        return
+    if trace.error:
+        print("  {} {}".format(_c("Fallback:", YELLOW), trace.error))
+    print("  Candidates: {} -> Final: {} | Latency: {:.0f}ms".format(
+        trace.candidate_count, trace.final_count, trace.latency_ms))
+    if trace.rank_comparison:
+        print()
+        print("  Rank comparison:")
+        for item in trace.rank_comparison[:10]:
+            chunk_id_short = item.get("chunk_id", "?")[:25]
+            ctype = item.get("chunk_type", "")
+            doc_name = item.get("document_name", "")[:30]
+            hybrid_rank = item.get("hybrid_rank", 0)
+            rerank_rank = item.get("rerank_rank", 0)
+            rerank_score = item.get("rerank_score", 0.0)
+            print("  #{} (was #{}) score={:.4f} {} [{}] {}".format(
+                rerank_rank, hybrid_rank, rerank_score,
+                _c(chunk_id_short, BWHITE), _c(ctype, DIM), _c(doc_name, DIM)))
+    print()
+
+
+def _print_hybrid_trace(result) -> None:
+    """Display hybrid retrieval pipeline debug info."""
+    from ..retrieval.hybrid_retriever import HybridResult
+    if not isinstance(result, HybridResult):
+        return
+    print(_c("  ── Hybrid Retrieval Pipeline ──", CYAN))
+    if result.rewritten:
+        rw = result.rewritten
+        print(f"    Normalized query: {rw.normalized}")
+        intent = rw.intent
+        label = intent.label
+        conf = intent.confidence
+        print(f"    Intent: {label} (confidence={conf:.2f})")
+        print(f"    Business query:  {rw.business_query[:80]}")
+        print(f"    Technical query: {rw.technical_query[:80]}")
+        print(f"    Keyword query:   {rw.keyword_query[:80]}")
+    print(f"    Vector hits:  {len(result.vector_hits)}")
+    print(f"    Keyword hits: {len(result.keyword_hits)}")
+    print(f"    Merged (dedup): {result.merged_count} (removed {result.dedup_removed} duplicates)")
+    print(f"    Final chunks:   {len(result.chunks)}")
+    print()
+
+
+def _print_hybrid_trace_from_retrieval_trace(trace) -> None:
+    """Display hybrid pipeline info from a RetrievalTrace (answer mode)."""
+    ht = trace.hybrid
+    if not ht.normalized_query:
+        return
+    print(_c("  ── Hybrid Pipeline (answer mode) ──", CYAN))
+    print("    Normalized: {}".format(ht.normalized_query))
+    print("    Intent: {} (confidence={:.2f})".format(ht.intent_label, ht.intent_confidence))
+    print("    Keyword query: {}".format(ht.keyword_query))
+    print("    Keyword hits: {}".format(ht.keyword_hits_count))
+    print("    Dedup removed: {}".format(ht.dedup_removed))
+    print()
+
+
 def _run_retrieve(query: str, s: _Session) -> None:
-    from ..retrieval.query_router import retrieve
+    from ..retrieval.hybrid_retriever import hybrid_retrieve
 
     t0 = time.time()
-    with _Spinner("Retrieving chunks…"):
-        resp = retrieve(query=query, top_k=s.top_k, include_graph=False, project_id=s.project_id)
+    with _Spinner("Retrieving chunks (hybrid)…"):
+        result = hybrid_retrieve(
+            query=query, top_k=s.top_k, project_id=s.project_id,
+        )
     elapsed = time.time() - t0
     _step("Retrieving chunks", elapsed)
     s.total_latency += elapsed
-    _print_chunks(resp.chunks, verbose=s.verbose)
+    _print_chunks(result.chunks, verbose=s.verbose)
 
     if s.debug_retrieval or s.show_vector_trace or s.show_graph_trace:
-        print(_c("  Note: --debug-retrieval traces are available in 'answer' mode only.", DIM))
-        print(_c("  Use 'mode answer' for full retrieval tracing.", DIM))
+        _print_hybrid_trace(result)
 
 
 def _run_answer(query: str, s: _Session) -> None:
@@ -560,12 +629,21 @@ def _run_answer(query: str, s: _Session) -> None:
 
     # Step 1: Graph-guided retrieval (graph exploration → guided vector search → merge)
     if s.vector_only:
-        from ..retrieval.vector_retriever import retrieve_chunks as _vec_retrieve
-        with _Spinner("① Vector retrieval (graph skipped)…"):
-            chunks = _vec_retrieve(
+        from ..retrieval.hybrid_retriever import hybrid_retrieve
+        with _Spinner("① Hybrid retrieval (vector + keyword, graph skipped)…"):
+            hybrid_result = hybrid_retrieve(
                 query=query, top_k=s.top_k, project_id=s.project_id,
-                trace=trace.vector if trace else None,
             )
+        chunks = hybrid_result.chunks
+        if trace is not None and hybrid_result.trace:
+            trace.hybrid = hybrid_result.trace
+        elif trace is not None and hybrid_result.rewritten:
+            trace.hybrid.normalized_query = hybrid_result.rewritten.normalized
+            trace.hybrid.intent_label = hybrid_result.rewritten.intent.label
+            trace.hybrid.intent_confidence = hybrid_result.rewritten.intent.confidence
+            trace.hybrid.keyword_query = hybrid_result.rewritten.keyword_query
+            trace.hybrid.keyword_hits_count = len(hybrid_result.keyword_hits)
+            trace.hybrid.dedup_removed = hybrid_result.dedup_removed
         dual_graph = None
         guidance_status = "none"
     else:
@@ -593,6 +671,9 @@ def _run_answer(query: str, s: _Session) -> None:
     # Print debug traces if active
     if trace and (s.debug_retrieval or s.show_vector_trace):
         _print_vector_trace(trace.vector)
+        _print_hybrid_trace_from_retrieval_trace(trace)
+    if trace and s.debug_retrieval and trace.rerank.enabled:
+        _print_rerank_trace(trace.rerank)
     if trace and (s.debug_retrieval or s.show_graph_trace):
         _print_graph_trace(trace.graph)
 
@@ -770,6 +851,19 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
     elif name == "trace":
         s.debug_retrieval = not s.debug_retrieval
         print(_c(f"  Debug retrieval trace → {'ON' if s.debug_retrieval else 'OFF'}", BGREEN))
+    elif name == "rerank":
+        if args and args[0].lower() == "on":
+            s.rerank_override = True
+        elif args and args[0].lower() == "off":
+            s.rerank_override = False
+        else:
+            if s.rerank_override is None:
+                s.rerank_override = True
+            else:
+                s.rerank_override = not s.rerank_override
+        state = "ON" if s.rerank_override else "OFF"
+        os.environ["RERANK_ENABLED"] = "true" if s.rerank_override else "false"
+        print(_c("  Rerank → {}".format(state), BGREEN))
     elif name in ("vector-only", "vectoronly"):
         s.vector_only = not s.vector_only
         print(_c(f"  Vector-only mode → {'ON' if s.vector_only else 'OFF'}", BGREEN))
@@ -806,7 +900,8 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
 _TAB_COMMANDS = [
     "/mode retrieve", "/mode answer", "/mode graph",
     "/topk ", "/verbose", "/evidence",
-    "/trace", "/vector-only", "/isolation",
+    "/trace", "/rerank", "/rerank on", "/rerank off",
+    "/vector-only", "/isolation",
     "/history", "/last", "/stats",
     "/sheets", "/sheet ", "/help", "/clear", "/quit", "/exit",
 ]

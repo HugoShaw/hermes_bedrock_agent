@@ -22,6 +22,9 @@ class Config:
     vlm_model_id: str = field(
         default_factory=lambda: os.getenv("BEDROCK_VLM_MODEL_ID", "jp.anthropic.claude-sonnet-4-6")
     )
+    vlm_fallback_model_id: str = field(
+        default_factory=lambda: os.getenv("BEDROCK_VLM_FALLBACK_MODEL_ID", "mistral.mistral-large-3-675b-instruct")
+    )
     embed_model_id: str = field(
         default_factory=lambda: os.getenv("BEDROCK_EMBED_MODEL_ID", "amazon.titan-embed-text-v2:0")
     )
@@ -62,6 +65,9 @@ class Config:
     )
     chunk_semantic_group_target: int = field(
         default_factory=lambda: int(os.getenv("CHUNK_SEMANTIC_GROUP_TARGET", "2000"))
+    )
+    chunk_strategy_enabled: bool = field(
+        default_factory=lambda: os.getenv("CHUNK_STRATEGY_ENABLED", "false").lower() in ("true", "1", "yes")
     )
     embed_batch_size: int = field(default_factory=lambda: int(os.getenv("EMBED_BATCH_SIZE", "10")))
 

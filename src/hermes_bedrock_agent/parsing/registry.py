@@ -45,6 +45,7 @@ def create_default_registry() -> ParserRegistry:
     from .html_parser import HtmlParser
     from .code_parser import CodeParser
     from .markdown_parser import MarkdownParser
+    from .text_parser import TextParser
     from .excel_vlm_adapter import ExcelVlmAdapter
 
     reg = ParserRegistry()
@@ -57,6 +58,7 @@ def create_default_registry() -> ParserRegistry:
     reg.register(MermaidParser())
     reg.register(ImageVlmParser())
     reg.register(HtmlParser())
+    reg.register(TextParser())       # Plain text passthrough (before CodeParser)
     reg.register(CodeParser())
     reg.register(MarkdownParser())
     return reg

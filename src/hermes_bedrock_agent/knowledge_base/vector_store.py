@@ -59,6 +59,15 @@ def _lancedb_schema() -> pa.Schema:
         pa.field("source_type", pa.string()),
         pa.field("parser_type", pa.string()),
         pa.field("document_role", pa.string()),
+        # Document-level provenance (graph linkage)
+        pa.field("document_id", pa.string()),
+        pa.field("document_name", pa.string()),
+        pa.field("document_type", pa.string()),
+        pa.field("unit_type", pa.string()),
+        pa.field("source_markdown_file", pa.string()),
+        pa.field("evidence_path", pa.string()),
+        pa.field("evidence_paths", pa.string()),  # JSON array
+        pa.field("content_hash", pa.string()),
         # Excel-specific (kept for backward compat)
         pa.field("sheet_index", pa.int32()),
         pa.field("sheet_name", pa.string()),
@@ -83,6 +92,16 @@ def _chunk_to_row(chunk: Chunk, embedding: list[float]) -> dict:
         "source_type": chunk.source_type,
         "parser_type": chunk.parser_type,
         "document_role": chunk.document_role,
+        # Document-level provenance (graph linkage)
+        "document_id": chunk.document_id,
+        "document_name": chunk.document_name,
+        "document_type": chunk.document_type,
+        "unit_type": chunk.unit_type,
+        "source_markdown_file": chunk.source_markdown_file,
+        "evidence_path": chunk.evidence_path,
+        "evidence_paths": json.dumps(chunk.evidence_paths, ensure_ascii=False),
+        "content_hash": chunk.content_hash,
+        # Excel-specific
         "sheet_index": chunk.sheet_index,
         "sheet_name": chunk.sheet_name,
         "workbook_name": chunk.workbook_name,
@@ -120,6 +139,13 @@ def load_vector_store(
             same project to avoid overwriting earlier workbooks' chunks.
     """
     cfg = cfg or _default_config
+
+    if replace_project and not project_id:
+        raise ValueError(
+            "load_vector_store: replace_project=True requires a non-empty project_id. "
+            "Refusing to drop the entire table. Pass replace_project=False to append."
+        )
+
     db_path = store_path or cfg.lancedb_path
     coll_name = collection or cfg.vector_collection
 
@@ -134,6 +160,20 @@ def load_vector_store(
 
     if coll_name in db.table_names():
         table = db.open_table(coll_name)
+        # Schema evolution: add any columns present in the target schema
+        # but missing from the existing table (backwards-compatible migration)
+        existing_cols = set(table.schema.names)
+        target_schema = _lancedb_schema()
+        for field in target_schema:
+            if field.name not in existing_cols and field.name != "embedding":
+                try:
+                    if pa.types.is_int32(field.type):
+                        table.add_columns({field.name: "CAST(NULL AS INTEGER)"})
+                    else:
+                        table.add_columns({field.name: "CAST(NULL AS STRING)"})
+                    logger.info("Schema evolution: added column '%s' to table '%s'", field.name, coll_name)
+                except Exception as exc:
+                    logger.warning("Could not add column '%s': %s", field.name, exc)
         if project_id and replace_project:
             # Delete only rows belonging to this project, preserving other projects
             _validate_project_id(project_id)

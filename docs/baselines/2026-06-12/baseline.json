@@ -1,0 +1,126 @@
+{
+  "meta": {
+    "collection": "murata_excel_vlm_dual_rag",
+    "store_path": "/home/ubuntu/projects/data/vector_store/lancedb",
+    "project_ids": [
+      "saimu_bugyo_cloud",
+      "sample_20260529"
+    ]
+  },
+  "lancedb_schema": {
+    "columns": [
+      {
+        "name": "id",
+        "type": "string"
+      },
+      {
+        "name": "text",
+        "type": "string"
+      },
+      {
+        "name": "embedding",
+        "type": "fixed_size_list<item: float>[1024]"
+      },
+      {
+        "name": "chunk_type",
+        "type": "string"
+      },
+      {
+        "name": "sheet_index",
+        "type": "int32"
+      },
+      {
+        "name": "sheet_name",
+        "type": "string"
+      },
+      {
+        "name": "workbook_name",
+        "type": "string"
+      },
+      {
+        "name": "source_pdf_s3_path",
+        "type": "string"
+      },
+      {
+        "name": "source_excel_s3_path",
+        "type": "string"
+      },
+      {
+        "name": "source_markdown_s3_path",
+        "type": "string"
+      },
+      {
+        "name": "systems",
+        "type": "string"
+      },
+      {
+        "name": "apis",
+        "type": "string"
+      },
+      {
+        "name": "related_sheets",
+        "type": "string"
+      },
+      {
+        "name": "project_id",
+        "type": "string"
+      }
+    ]
+  },
+  "chunk_counts": {
+    "saimu_bugyo_cloud": 0,
+    "sample_20260529": 369,
+    "__total__": 801
+  },
+  "project_isolation": {
+    "saimu_bugyo_cloud": {
+      "contamination": [],
+      "is_clean": true
+    },
+    "sample_20260529": {
+      "contamination": [],
+      "is_clean": true
+    }
+  },
+  "neptune_counts": {
+    "skipped": true
+  },
+  "qa_snapshot": {
+    "skipped": true
+  },
+  "test_suite": {
+    "exit_code": 2,
+    "stdout_tail": "w_exporter.py\nERROR tests/test_schemas.py\nERROR tests/test_schemas_new.py\nERROR tests/test_settings.py\nERROR tests/test_subgraph_query.py\nERROR tests/test_svg_renderer.py\nERROR tests/test_text_retriever.py\nERROR tests/test_text_retriever_vector_store.py\nERROR tests/test_utils.py\nERROR tests/test_vector_store_base.py\nERROR tests/test_visualization_i18n_labels.py\nERROR tests/test_vlm_parser_mock.py\n!!!!!!!!!!!!!!!!!!! Interrupted: 44 errors during collection !!!!!!!!!!!!!!!!!!!\n44 errors in 1.92s\n",
+    "stderr_tail": ""
+  },
+  "chunker_snapshot": {
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_HULFT Squareアプリケーション仕様書_債務奉行クラウド/vlm_parsed": "45882511772069eb23cae12836a78be4a46b9abea04dba5b5ff321814114286f",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_アプリケーション概要_債務奉行クラウド/vlm_parsed": "59c1cbb3ac5f294c81027c46b857de831c723c1087fe6a5bc0d11b64f5c16eaf",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_スクリプト試験票_債務奉行_export_debt_slip/vlm_parsed": "008596b452fe2dea63ba045d66d0352dfcbda2b71ab678d858a15f407da3b7c9",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_スクリプト試験票_債務奉行_import_buy_slip/vlm_parsed": "3db6162b80e501046e47aa04ea8cb8ad707d0cf7c4cf72e303614daa1e480424",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_スクリプト試験票_債務奉行_import_buy_slip_result/vlm_parsed": "effe42b7ad7c2ae6996571d6828c83e3d9ea80789a20f65d3b3ff0578f74148a",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_スクリプト試験票_債務奉行_export_debt_slip/vlm_parsed": "56c7bf5013e83fbc1a7aafe54c9405622ca0365e895303722ef76eeb33e7a576",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_スクリプト試験票_債務奉行_import_buy_slip/vlm_parsed": "b75111e2434ce15bb9bb6f8ac373473f4e06d55ec1f317d2ecb9d0f978d37b04",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_スクリプト試験票_債務奉行_import_buy_slip_result/vlm_parsed": "718baa426e65571065c530b9e93ff68ab12a8c7412d658302c260bf8c2807782",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_試験結果_債務奉行_export_debt_slip/vlm_parsed": "61824b7f0cc1d7f32585819af05723fa2d3482b6fee46854d35c9753332ebdb1",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_試験結果_債務奉行_import_buy_slip/vlm_parsed": "3ba3bb01f2a41f402a9bd59b75c8610c3b4b75b495ce5568ebd154031e0b5d30",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_試験結果_債務奉行_import_buy_slip_result/vlm_parsed": "9a870c1e60164303c6562b51ed75eee9ecfcd99b8db6673724f67cc28dd293f0",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_アプリケーション概要/vlm_parsed": "ce4937ea76162d7392fa54cd559c29d6b6e799d1e95812139ac19553bab6c3bf",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_アプリケーション仕様書/vlm_parsed": "548a9fc24b3c57a956498b547d20bbccfd55e1511d400398fe54bd966e98df77",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/債務_APIデータ形式/vlm_parsed": "3257c7f8ec1dfa69c0fa1c03e176fcdc4fadf3ead219c31925a0eb61c642a376",
+    "outputs/phase_b_validation/run_20260612_051136/legacy_compat/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "a00f4920b4417db14bd5ffed2bbf04d68604eecdb6c2b1e32890a3e4487310ce",
+    "outputs/refactor_sample_20260519/run_20260611_082853/MW_IFマッピング定義書_205_発注情報(登録・変更・取消)/vlm_parsed": "17a0ae09fd409382dd598c98ed7ae6fc74871535e9d937d61c6732bc07d31f07",
+    "outputs/refactor_sample_20260519/run_20260611_082853/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "0a7f23d2e197fa58bd52d824d2afda45df435ed24db3e3fb77b33750ed088b9f",
+    "outputs/refactor_unified_sample_20260519/run_20260612_010015/_staging/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "outputs/refactor_unified_sample_20260519/run_20260612_010109/legacy_compat/MW_IFマッピング定義書_205_発注情報(登録・変更・取消)/vlm_parsed": "8eba8f51a7e7cf7f4664016e4fb54fb89654463cff80bd91b099827294dd4bdd",
+    "outputs/refactor_unified_sample_20260519/run_20260612_010109/legacy_compat/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "fc1ade5689045ffcac0e1ff30f3e5a627e07f8514655593983c36edd84de5c68",
+    "outputs/refactor_unified_sample_20260519/run_20260612_031520/legacy_compat/MW_IFマッピング定義書_205_発注情報(登録・変更・取消)/vlm_parsed": "867c9f06bd18444f8aea63c36bba0061deb34942a633c5583fee3e430f231a18",
+    "outputs/refactor_unified_sample_20260519/run_20260612_031520/legacy_compat/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "83d2d5c45925b0c6a7e933f0b69c9fb47af9640612ea8f5f994994a0ba692925",
+    "outputs/refactor_unified_sample_20260519/run_20260612_052932/legacy_compat/MW_IFマッピング定義書_205_発注情報(登録・変更・取消)/vlm_parsed": "6e7f9367ebc5028de489c88d60ba67d8440f63755f9180cb134b1cb0ccd64401",
+    "outputs/refactor_unified_sample_20260519/run_20260612_052932/legacy_compat/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "242c2b19857793174cc15b0a87e58303fc78037b329a1eab3ca2661ee0bca607",
+    "outputs/サンプル20260519/run_20260602_074637/MW_IFマッピング定義書_205_発注情報(登録・変更・取消)/vlm_parsed": "a691d7aedb633a48e6f07148eaae5902bdf676e590f51749df7e2ed79e7b3ffc",
+    "outputs/サンプル20260519/run_20260602_074637/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "946938d53dd81c9262ba98d11a0fb18b9632e4b04415d50fd1bf852ea3a4a466",
+    "outputs/サンプル20260529/wb1_flowchart/vlm_parsed": "5decf8beb967624d7771dca1be76b541c217191054518eede265bd5b89737681",
+    "outputs/サンプル20260529/wb2_mapping/vlm_parsed": "717721712dbf1c018ae998e130ad34d7b2712cedb2405f52d4540f4bc1ee61ec"
+  }
+}
