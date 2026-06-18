@@ -93,6 +93,28 @@ class RerankTrace:
 
 
 @dataclass
+class GraphExpansionTrace:
+    """Trace data from graph expansion candidate generation."""
+    enabled: bool = False
+    neptune_available: bool = False
+    entities_extracted: list[dict] = field(default_factory=list)
+    relation_allowlist: list[str] = field(default_factory=list)
+    expansion_hops: int = 0
+    graph_nodes_matched: int = 0
+    graph_paths: list[str] = field(default_factory=list)
+    graph_candidates_count: int = 0
+    graph_candidates_resolved: int = 0
+    graph_candidates_new: int = 0
+    graph_candidates_duplicate: int = 0
+    join_methods_used: dict = field(default_factory=dict)
+    candidates_before_graph: int = 0
+    candidates_after_graph: int = 0
+    graph_candidates_survived_rerank: int = 0
+    error: Optional[str] = None
+    candidates: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class RetrievalTrace:
     """Complete retrieval trace for one query."""
     enabled: bool = False
@@ -102,6 +124,7 @@ class RetrievalTrace:
     timing: TimingTrace = field(default_factory=TimingTrace)
     hybrid: HybridTrace = field(default_factory=HybridTrace)
     rerank: RerankTrace = field(default_factory=RerankTrace)
+    graph_expansion: GraphExpansionTrace = field(default_factory=GraphExpansionTrace)
 
 
 class Timer:

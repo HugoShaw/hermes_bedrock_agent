@@ -774,6 +774,118 @@ def retrieve_with_graph_guidance(
     if trace is not None:
         trace.timing.merge_boost_ms = boost_timer.elapsed_ms + kw_timer.elapsed_ms
 
+    # Step 4a: Graph expansion — entity extraction + Neptune expansion + LanceDB join
+    from .entity_extractor import extract_entities
+    from .graph_expansion import expand_graph, resolve_graph_candidates_to_chunks
+
+    graph_exp_trace = trace.graph_expansion if trace else None
+    if graph_exp_trace:
+        graph_exp_trace.enabled = True
+        graph_exp_trace.candidates_before_graph = len(chunks)
+
+    try:
+        entities = extract_entities(
+            original_query=query,
+            rewritten_queries=[rewritten.business_query, rewritten.technical_query, rewritten.keyword_query],
+            top_chunks=chunks[:5],
+        )
+
+        if graph_exp_trace:
+            graph_exp_trace.entities_extracted = [
+                {"text": e.text, "type": e.entity_type, "source": e.source, "confidence": e.confidence}
+                for e in entities
+            ]
+
+        initial_chunk_ids = {c.chunk_id for c in chunks}
+
+        graph_expansion_result = expand_graph(
+            entities=entities,
+            intent_label=intent.label,
+            project_id=project_id,
+            initial_chunk_ids=initial_chunk_ids,
+            cfg=cfg,
+        )
+
+        if graph_exp_trace:
+            graph_exp_trace.neptune_available = graph_expansion_result.neptune_available
+            graph_exp_trace.relation_allowlist = graph_expansion_result.relation_allowlist_used
+            graph_exp_trace.expansion_hops = graph_expansion_result.expansion_hops
+            graph_exp_trace.graph_nodes_matched = len(graph_expansion_result.graph_nodes_matched)
+            graph_exp_trace.graph_paths = graph_expansion_result.graph_paths
+            graph_exp_trace.graph_candidates_count = len(graph_expansion_result.candidates)
+            if graph_expansion_result.error:
+                graph_exp_trace.error = graph_expansion_result.error
+
+        if graph_expansion_result.neptune_available and graph_expansion_result.candidates:
+            resolved = resolve_graph_candidates_to_chunks(
+                graph_result=graph_expansion_result,
+                project_id=project_id,
+                initial_chunk_ids=initial_chunk_ids,
+                cfg=cfg,
+            )
+
+            new_count = 0
+            dup_count = 0
+            join_methods: dict[str, int] = {}
+            for gc in resolved:
+                jm = gc.join_method
+                join_methods[jm] = join_methods.get(jm, 0) + 1
+                if gc.chunk_id and gc.chunk_id not in initial_chunk_ids:
+                    if not gc.already_in_initial:
+                        chunk = RetrievedChunk(
+                            chunk_id=gc.chunk_id,
+                            content=gc.content,
+                            score=gc.score,
+                            chunk_type=gc.chunk_type,
+                            sheet_index=0,
+                            sheet_name=gc.sheet_name,
+                            project_id=gc.project_id,
+                            document_id=gc.document_id,
+                            document_name=gc.document_name,
+                            document_type=gc.document_type,
+                            source_markdown_file=gc.source_markdown_file,
+                            evidence_path=gc.evidence_path,
+                            evidence_paths=str(gc.evidence_paths) if gc.evidence_paths else "",
+                            source_file=gc.source_file,
+                            source_type=gc.source_type,
+                            parser_type=gc.parser_type,
+                        )
+                        chunks.append(chunk)
+                        initial_chunk_ids.add(gc.chunk_id)
+                        new_count += 1
+                    else:
+                        dup_count += 1
+                else:
+                    dup_count += 1
+
+            if graph_exp_trace:
+                graph_exp_trace.graph_candidates_resolved = len(resolved)
+                graph_exp_trace.graph_candidates_new = new_count
+                graph_exp_trace.graph_candidates_duplicate = dup_count
+                graph_exp_trace.join_methods_used = join_methods
+                graph_exp_trace.candidates = [
+                    {
+                        "chunk_id": gc.chunk_id or "",
+                        "graph_node_name": gc.graph_node_name,
+                        "graph_node_type": gc.graph_node_type,
+                        "join_method": gc.join_method,
+                        "join_confidence": gc.join_confidence,
+                        "already_in_initial": gc.already_in_initial,
+                        "document_name": gc.document_name,
+                    }
+                    for gc in resolved
+                ]
+
+            chunks = sorted(chunks, key=lambda c: c.score, reverse=True)
+
+    except Exception as exc:
+        logger.warning("Graph expansion failed (non-fatal): %s", exc)
+        if graph_exp_trace:
+            graph_exp_trace.error = str(exc)
+
+    if graph_exp_trace:
+        graph_exp_trace.candidates_after_graph = len(chunks)
+
     # Step 4b: Optional reranking (after keyword boost, before graph context build)
     from .reranker import load_rerank_config, rerank_chunks
     from .trace import RerankTrace, Timer as _Timer
@@ -804,6 +916,15 @@ def retrieve_with_graph_guidance(
                     "hybrid_score": round(chunks_before_rerank[pre_order.get(chunk.chunk_id, 1) - 1].score, 4) if pre_order.get(chunk.chunk_id) else 0.0,
                     "rerank_score": rerank_result.rerank_scores.get(chunk.chunk_id, 0.0),
                 })
+
+    # Track graph candidates that survived reranking
+    if trace and trace.graph_expansion.graph_candidates_new > 0 and rerank_cfg.enabled:
+        graph_chunk_ids = {
+            c["chunk_id"] for c in trace.graph_expansion.candidates
+            if not c["already_in_initial"] and c["chunk_id"]
+        }
+        survived = sum(1 for c in chunks if c.chunk_id in graph_chunk_ids)
+        trace.graph_expansion.graph_candidates_survived_rerank = survived
 
     if not chunks:
         return [], None, guidance_status
