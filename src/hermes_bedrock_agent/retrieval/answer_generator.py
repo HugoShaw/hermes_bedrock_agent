@@ -249,6 +249,22 @@ def _derive_pdf_from_markdown_path(md_path: str) -> Optional[Path]:
     return None
 
 
+def _derive_run_dir(md_path: str) -> Optional[Path]:
+    """Derive the run directory from a parsed markdown file path.
+
+    Paths like:
+      .../outputs/project_id/run_YYYYMMDD_HHMMSS/parsed/excel/workbook/sheet.md
+    The run directory is the ancestor containing 'run_' in its name.
+    """
+    if not md_path:
+        return None
+    p = Path(md_path)
+    for parent in p.parents:
+        if parent.name.startswith("run_"):
+            return parent
+    return None
+
+
 def load_evidence_images(
     chunks: list[RetrievedChunk],
     project_root: Path,
@@ -289,6 +305,35 @@ def load_evidence_images(
                 if dedup_key in seen_paths:
                     continue
                 local_path = derived
+
+        # Strategy C: Use evidence_path relative to run directory (live data path)
+        # evidence_path is like "evidence/excel/WorkbookName/sheet_XX/"
+        # source_markdown_file gives us the run directory
+        if local_path is None or (local_path and not local_path.exists()):
+            ev_path = chunk.evidence_path
+            md_file = chunk.parsed_markdown_path or chunk.source_markdown_file
+            if ev_path and md_file:
+                # Derive run directory from markdown path
+                # e.g. .../outputs/project/run_YYYYMMDD_HHMMSS/parsed/excel/...
+                run_dir = _derive_run_dir(md_file)
+                if run_dir:
+                    ev_dir = run_dir / ev_path
+                    if ev_dir.is_dir():
+                        # Look for PDF in evidence directory
+                        pdf_candidates = sorted(ev_dir.glob("*.pdf"))
+                        if pdf_candidates:
+                            local_path = pdf_candidates[0]
+                            dedup_key = str(local_path)
+                            if dedup_key in seen_paths:
+                                continue
+                        else:
+                            # Look for PNG (full.png or any png)
+                            full_png = ev_dir / "full.png"
+                            if full_png.exists():
+                                local_path = full_png
+                                dedup_key = str(full_png)
+                                if dedup_key in seen_paths:
+                                    continue
 
         if not dedup_key or dedup_key in seen_paths:
             continue

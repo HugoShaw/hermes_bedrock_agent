@@ -14,6 +14,22 @@ from .entity_extractor import ExtractedEntity
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_str(val: object) -> str:
+    """Convert a pandas row value to a clean string, handling NaN/None/float safely."""
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        # NaN from pandas
+        import math
+        if math.isnan(val):
+            return ""
+        return str(val)
+    s = str(val).strip()
+    if s in ("nan", "None", "null"):
+        return ""
+    return s
+
 # Intent-aware relation allowlists (actual Neptune graph schema)
 INTENT_RELATION_ALLOWLISTS: dict[str, list[str]] = {
     "api": ["CALLS_API", "HAS_PARAMETER", "NEXT_STEP", "EXTRACTED_OBJECT", "HAS_SHEET", "CONTAINS_STEP"],
@@ -57,6 +73,10 @@ class GraphCandidate:
     source_type: str = ""
     parser_type: str = ""
     chunk_type: str = ""
+    # Evidence resolution fields (must pass through to RetrievedChunk for evidence loading)
+    source_pdf_s3_path: str = ""
+    source_excel_s3_path: str = ""
+    parsed_markdown_path: str = ""
 
 
 @dataclass
@@ -347,24 +367,72 @@ def resolve_graph_candidates_to_chunks(
         logger.debug("LanceDB connection failed for graph candidate resolution: %s", exc)
         return resolved
 
-    try:
-        df = table.to_pandas()
-        # Drop vector column to save memory
-        if "vector" in df.columns:
-            df = df.drop(columns=["vector"])
-    except Exception as exc:
-        logger.debug("LanceDB to_pandas failed: %s", exc)
+    # Collect unique workbook_names from candidates for targeted filtering
+    candidate_workbooks = set()
+    for c in graph_result.candidates:
+        if c.workbook_name:
+            candidate_workbooks.add(c.workbook_name)
+
+    if not candidate_workbooks:
         return resolved
 
-    # Get available project IDs for mapping
-    available_pids = df["project_id"].unique().tolist()
+    # Optimized path: filtered query with column selection to avoid loading embeddings
+    # Select only the columns we need (excludes embedding vector ~3x speedup)
+    select_cols = [
+        "id", "text", "project_id", "workbook_name", "sheet_name",
+        "chunk_type", "document_id", "document_name", "document_type",
+        "source_markdown_file", "evidence_path", "evidence_paths",
+        "source_file", "source_type", "parser_type",
+        "source_pdf_s3_path", "source_excel_s3_path",
+        "parsed_markdown_path",
+    ]
 
-    # Filter by project_id (with normalization)
-    if project_id:
-        normalized_pid = _normalize_project_id_for_lancedb(project_id, available_pids)
-        df_project = df[df["project_id"] == normalized_pid]
-    else:
-        df_project = df
+    try:
+        # Build SQL filter: project_id + workbook_name IN (...)
+        workbook_list = ", ".join(f"'{wb}'" for wb in candidate_workbooks)
+        if project_id:
+            # First try to get normalized project_id — read small sample
+            sample_df = table.search().limit(1).to_pandas()
+            available_pids = []
+            if "project_id" in sample_df.columns and not sample_df.empty:
+                # Do a broader scan for unique project IDs
+                pid_df = table.search().select(["project_id"]).limit(10000).to_pandas()
+                available_pids = pid_df["project_id"].dropna().unique().tolist()
+            normalized_pid = _normalize_project_id_for_lancedb(project_id, available_pids)
+            where_clause = f"project_id = '{normalized_pid}' AND workbook_name IN ({workbook_list})"
+        else:
+            where_clause = f"workbook_name IN ({workbook_list})"
+
+        # Filter existing columns only (some may not exist in table schema)
+        table_columns = {f.name for f in table.schema}
+        valid_cols = [c for c in select_cols if c in table_columns]
+
+        df_project = (
+            table.search()
+            .where(where_clause)
+            .select(valid_cols)
+            .limit(5000)  # Safety cap — typical workbook has ~100-500 chunks
+            .to_pandas()
+        )
+    except Exception as exc:
+        # Fallback: full table scan if filtered query fails
+        logger.warning("Optimized LanceDB query failed, falling back to full scan: %s", exc)
+        try:
+            df = table.to_pandas()
+            if "embedding" in df.columns:
+                df = df.drop(columns=["embedding"])
+            if "vector" in df.columns:
+                df = df.drop(columns=["vector"])
+            # Filter by project
+            if project_id:
+                available_pids = df["project_id"].unique().tolist()
+                normalized_pid = _normalize_project_id_for_lancedb(project_id, available_pids)
+                df_project = df[df["project_id"] == normalized_pid]
+            else:
+                df_project = df
+        except Exception as exc2:
+            logger.debug("LanceDB fallback scan also failed: %s", exc2)
+            return resolved
 
     if df_project.empty:
         return resolved
@@ -405,7 +473,7 @@ def resolve_graph_candidates_to_chunks(
 
             resolved_candidate = GraphCandidate(
                 chunk_id=chunk_id,
-                content=str(row.get("text", "")),
+                content=_safe_str(row.get("text", "")),
                 score=candidate.score * join_confidence,
                 retrieval_source="graph",
                 graph_node_id=candidate.graph_node_id,
@@ -415,19 +483,28 @@ def resolve_graph_candidates_to_chunks(
                 join_method=join_method,
                 join_confidence=join_confidence,
                 already_in_initial=is_duplicate,
-                project_id=str(row.get("project_id", "")),
-                workbook_name=str(row.get("workbook_name", "")),
-                sheet_name=str(row.get("sheet_name", "")),
-                document_id=str(row.get("document_id", "")),
-                document_name=str(row.get("document_name", "")),
-                document_type=str(row.get("document_type", "")),
-                source_markdown_file=str(row.get("source_markdown_file", "")),
-                evidence_path=str(row.get("evidence_path", "")),
+                project_id=_safe_str(row.get("project_id", "")),
+                workbook_name=_safe_str(row.get("workbook_name", "")),
+                sheet_name=_safe_str(row.get("sheet_name", "")),
+                document_id=_safe_str(row.get("document_id", "")),
+                document_name=_safe_str(row.get("document_name", "")),
+                document_type=_safe_str(row.get("document_type", "")),
+                source_markdown_file=_safe_str(row.get("source_markdown_file", "")),
+                evidence_path=_safe_str(row.get("evidence_path", "")),
                 evidence_paths=_parse_evidence_paths(row.get("evidence_paths", "")),
-                source_file=str(row.get("source_file", "")),
-                source_type=str(row.get("source_type", "")),
-                parser_type=str(row.get("parser_type", "")),
-                chunk_type=str(row.get("chunk_type", "")),
+                source_file=_safe_str(row.get("source_file", "")),
+                source_type=_safe_str(row.get("source_type", "")),
+                parser_type=_safe_str(row.get("parser_type", "")),
+                chunk_type=_safe_str(row.get("chunk_type", "")),
+                # Evidence resolution fields — required for answer_generator evidence loading
+                source_pdf_s3_path=_safe_str(row.get("source_pdf_s3_path", "")),
+                source_excel_s3_path=_safe_str(row.get("source_excel_s3_path", "")),
+                # parsed_markdown_path may not exist as a LanceDB column;
+                # fall back to source_markdown_file which is semantically equivalent.
+                parsed_markdown_path=(
+                    _safe_str(row.get("parsed_markdown_path", ""))
+                    or _safe_str(row.get("source_markdown_file", ""))
+                ),
             )
             resolved.append(resolved_candidate)
 

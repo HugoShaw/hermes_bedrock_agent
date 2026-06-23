@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Optional
 
 from ..config import Config, config as _default_config
@@ -11,6 +12,20 @@ from ..knowledge_base.vector_store import query_vector_store
 from .trace import VectorTrace
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_str(val: object) -> str:
+    """Convert a pandas row value to a clean string, handling NaN/None/float safely."""
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        if math.isnan(val):
+            return ""
+        return str(val)
+    s = str(val).strip()
+    if s in ("nan", "None", "null"):
+        return ""
+    return s
 
 
 def retrieve_chunks(
@@ -35,26 +50,29 @@ def retrieve_chunks(
     for row in raw_results:
         distance = row.get("_distance", 0.0)
         score = 1.0 / (1.0 + distance)
+        # parsed_markdown_path may not exist as a column in LanceDB;
+        # fall back to source_markdown_file which is semantically equivalent.
+        parsed_md = _safe_str(row.get("parsed_markdown_path", "")) or _safe_str(row.get("source_markdown_file", ""))
         chunks.append(RetrievedChunk(
-            chunk_id=row.get("id", ""),
-            content=row.get("text", ""),
-            chunk_type=row.get("chunk_type", ""),
+            chunk_id=_safe_str(row.get("id", "")),
+            content=_safe_str(row.get("text", "")),
+            chunk_type=_safe_str(row.get("chunk_type", "")),
             sheet_index=row.get("sheet_index", 0),
-            sheet_name=row.get("sheet_name", ""),
+            sheet_name=_safe_str(row.get("sheet_name", "")),
             score=round(score, 4),
-            source_pdf_s3_path=row.get("source_pdf_s3_path", ""),
-            source_excel_s3_path=row.get("source_excel_s3_path", ""),
-            project_id=row.get("project_id", project_id),
-            parsed_markdown_path=row.get("parsed_markdown_path", ""),
-            document_id=row.get("document_id", ""),
-            document_name=row.get("document_name", ""),
-            document_type=row.get("document_type", ""),
-            source_markdown_file=row.get("source_markdown_file", ""),
-            evidence_path=row.get("evidence_path", ""),
-            evidence_paths=str(row.get("evidence_paths", "")),
-            source_file=row.get("source_file", ""),
-            source_type=row.get("source_type", ""),
-            parser_type=row.get("parser_type", ""),
+            source_pdf_s3_path=_safe_str(row.get("source_pdf_s3_path", "")),
+            source_excel_s3_path=_safe_str(row.get("source_excel_s3_path", "")),
+            project_id=_safe_str(row.get("project_id", "")) or project_id,
+            parsed_markdown_path=parsed_md,
+            document_id=_safe_str(row.get("document_id", "")),
+            document_name=_safe_str(row.get("document_name", "")),
+            document_type=_safe_str(row.get("document_type", "")),
+            source_markdown_file=_safe_str(row.get("source_markdown_file", "")),
+            evidence_path=_safe_str(row.get("evidence_path", "")),
+            evidence_paths=_safe_str(row.get("evidence_paths", "")),
+            source_file=_safe_str(row.get("source_file", "")),
+            source_type=_safe_str(row.get("source_type", "")),
+            parser_type=_safe_str(row.get("parser_type", "")),
         ))
 
     if trace is not None:

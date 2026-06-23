@@ -372,6 +372,36 @@ class TestGraphCandidateResolution(unittest.TestCase):
     def _make_lancedb_df(self, rows):
         return pd.DataFrame(rows)
 
+    def _setup_mock_table(self, mock_table, df):
+        """Configure mock table to support both the optimized chained-query path
+        and the fallback to_pandas() path used by resolve_graph_candidates_to_chunks.
+
+        The optimized code calls:
+          table.search().where(...).select(...).limit(...).to_pandas()
+          table.search().limit(1).to_pandas()  (sample for project_id normalization)
+          table.search().select([...]).limit(10000).to_pandas()  (for available PIDs)
+          table.schema  (iterable of objects with .name attr)
+
+        The fallback calls:
+          table.to_pandas()
+        """
+        # Create a schema mock from DataFrame columns
+        class _MockField:
+            def __init__(self, name):
+                self.name = name
+        mock_table.schema = [_MockField(c) for c in df.columns]
+
+        # Fallback path
+        mock_table.to_pandas.return_value = df
+
+        # Chained query builder: search() -> where() -> select() -> limit() -> to_pandas()
+        query_builder = MagicMock()
+        query_builder.where.return_value = query_builder
+        query_builder.select.return_value = query_builder
+        query_builder.limit.return_value = query_builder
+        query_builder.to_pandas.return_value = df
+        mock_table.search.return_value = query_builder
+
     @patch("hermes_bedrock_agent.retrieval.graph_expansion.lancedb")
     def test_project_workbook_sheet_join(self, mock_lancedb):
         mock_db = MagicMock()
@@ -393,7 +423,7 @@ class TestGraphCandidateResolution(unittest.TestCase):
             "parser_type": "vlm",
             "chunk_type": "api_spec",
         }])
-        mock_table.to_pandas.return_value = df
+        self._setup_mock_table(mock_table, df)
         mock_db.open_table.return_value = mock_table
         mock_lancedb.connect.return_value = mock_db
 
@@ -442,7 +472,7 @@ class TestGraphCandidateResolution(unittest.TestCase):
             "parser_type": "vlm",
             "chunk_type": "overview",
         }])
-        mock_table.to_pandas.return_value = df
+        self._setup_mock_table(mock_table, df)
         mock_db.open_table.return_value = mock_table
         mock_lancedb.connect.return_value = mock_db
 
@@ -492,7 +522,7 @@ class TestGraphCandidateResolution(unittest.TestCase):
             "parser_type": "",
             "chunk_type": "",
         }])
-        mock_table.to_pandas.return_value = df
+        self._setup_mock_table(mock_table, df)
         mock_db.open_table.return_value = mock_table
         mock_lancedb.connect.return_value = mock_db
 
@@ -537,7 +567,7 @@ class TestGraphCandidateResolution(unittest.TestCase):
             "parser_type": "",
             "chunk_type": "",
         }])
-        mock_table.to_pandas.return_value = df
+        self._setup_mock_table(mock_table, df)
         mock_db.open_table.return_value = mock_table
         mock_lancedb.connect.return_value = mock_db
 
@@ -583,8 +613,11 @@ class TestGraphCandidateResolution(unittest.TestCase):
             "source_type": "excel",
             "parser_type": "vlm",
             "chunk_type": "mapping_table",
+            "source_pdf_s3_path": "s3://bucket/outputs/WB_Full/pdf/sheet_02.pdf",
+            "source_excel_s3_path": "s3://bucket/source/WB_Full.xlsx",
+            "parsed_markdown_path": "/outputs/WB_Full/vlm_parsed/sheet_02.md",
         }])
-        mock_table.to_pandas.return_value = df
+        self._setup_mock_table(mock_table, df)
         mock_db.open_table.return_value = mock_table
         mock_lancedb.connect.return_value = mock_db
 
@@ -617,6 +650,120 @@ class TestGraphCandidateResolution(unittest.TestCase):
         self.assertEqual(r.source_type, "excel")
         self.assertEqual(r.parser_type, "vlm")
         self.assertEqual(r.chunk_type, "mapping_table")
+        # Evidence resolution fields (P1 fix)
+        self.assertEqual(r.source_pdf_s3_path, "s3://bucket/outputs/WB_Full/pdf/sheet_02.pdf")
+        self.assertEqual(r.source_excel_s3_path, "s3://bucket/source/WB_Full.xlsx")
+        self.assertEqual(r.parsed_markdown_path, "/outputs/WB_Full/vlm_parsed/sheet_02.md")
+
+    @patch("hermes_bedrock_agent.retrieval.graph_expansion.lancedb")
+    def test_optimized_query_fallback_to_full_scan(self, mock_lancedb):
+        """When the chained query raises an exception, fallback to table.to_pandas() works."""
+        mock_db = MagicMock()
+        mock_table = MagicMock()
+        df = self._make_lancedb_df([{
+            "id": "fallback_chunk",
+            "text": "Fallback content",
+            "project_id": "sample_20260519",
+            "workbook_name": "WB_Fallback",
+            "sheet_name": "sheet_01",
+            "document_id": "doc_fb",
+            "document_name": "WB_Fallback",
+            "document_type": "excel",
+            "source_markdown_file": "/parsed/fb.md",
+            "evidence_path": "/evidence/fb.png",
+            "evidence_paths": "",
+            "source_file": "/src/fb.xlsx",
+            "source_type": "excel",
+            "parser_type": "vlm",
+            "chunk_type": "overview",
+        }])
+        # Optimized path raises -> fallback to to_pandas()
+        query_builder = MagicMock()
+        query_builder.where.side_effect = RuntimeError("simulated query failure")
+        mock_table.search.return_value = query_builder
+        mock_table.to_pandas.return_value = df
+        mock_db.open_table.return_value = mock_table
+        mock_lancedb.connect.return_value = mock_db
+
+        candidate = GraphCandidate(
+            content="Fallback test",
+            score=0.6,
+            graph_node_id="node_fb",
+            graph_node_name="Fallback",
+            graph_node_type="Field",
+            project_id="sample_20260519",
+            workbook_name="WB_Fallback",
+            sheet_name="sheet_01",
+        )
+        graph_result = self._make_graph_result([candidate])
+
+        resolved = resolve_graph_candidates_to_chunks(
+            graph_result=graph_result,
+            project_id="sample_20260519",
+            initial_chunk_ids=set(),
+        )
+
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0].chunk_id, "fallback_chunk")
+        self.assertEqual(resolved[0].join_method, "project_workbook_sheet")
+
+    @patch("hermes_bedrock_agent.retrieval.graph_expansion.lancedb")
+    def test_project_id_isolation(self, mock_lancedb):
+        """Candidates from other projects are not resolved."""
+        mock_db = MagicMock()
+        mock_table = MagicMock()
+        df = self._make_lancedb_df([
+            {
+                "id": "chunk_project_a",
+                "text": "Project A content",
+                "project_id": "project_a",
+                "workbook_name": "SharedWB",
+                "sheet_name": "sheet_01",
+                "document_id": "", "document_name": "", "document_type": "",
+                "source_markdown_file": "", "evidence_path": "",
+                "evidence_paths": "", "source_file": "",
+                "source_type": "excel", "parser_type": "vlm", "chunk_type": "",
+            },
+            {
+                "id": "chunk_project_b",
+                "text": "Project B content",
+                "project_id": "project_b",
+                "workbook_name": "SharedWB",
+                "sheet_name": "sheet_01",
+                "document_id": "", "document_name": "", "document_type": "",
+                "source_markdown_file": "", "evidence_path": "",
+                "evidence_paths": "", "source_file": "",
+                "source_type": "excel", "parser_type": "vlm", "chunk_type": "",
+            },
+        ])
+        # For the optimized path, return only project_a rows
+        df_a = df[df["project_id"] == "project_a"].copy()
+        self._setup_mock_table(mock_table, df_a)
+        mock_db.open_table.return_value = mock_table
+        mock_lancedb.connect.return_value = mock_db
+
+        candidate = GraphCandidate(
+            content="Shared WB test",
+            score=0.6,
+            graph_node_id="node_shared",
+            graph_node_name="SharedWB",
+            graph_node_type="Workbook",
+            project_id="project_a",
+            workbook_name="SharedWB",
+            sheet_name="sheet_01",
+        )
+        graph_result = self._make_graph_result([candidate])
+
+        resolved = resolve_graph_candidates_to_chunks(
+            graph_result=graph_result,
+            project_id="project_a",
+            initial_chunk_ids=set(),
+        )
+
+        # Should resolve only from project_a, not project_b
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0].project_id, "project_a")
+        self.assertEqual(resolved[0].chunk_id, "chunk_project_a")
 
 
 class TestGraphExpansionTrace(unittest.TestCase):
@@ -724,7 +871,18 @@ class TestIntegration(unittest.TestCase):
             "parser_type": "vlm",
             "chunk_type": "api_spec",
         }])
+        # Setup mock with chained query support
+        class _MockField:
+            def __init__(self, name):
+                self.name = name
+        mock_table.schema = [_MockField(c) for c in df.columns]
         mock_table.to_pandas.return_value = df
+        query_builder = MagicMock()
+        query_builder.where.return_value = query_builder
+        query_builder.select.return_value = query_builder
+        query_builder.limit.return_value = query_builder
+        query_builder.to_pandas.return_value = df
+        mock_table.search.return_value = query_builder
         mock_db.open_table.return_value = mock_table
         mock_lancedb.connect.return_value = mock_db
 

@@ -597,6 +597,84 @@ def _print_hybrid_trace_from_retrieval_trace(trace) -> None:
     print()
 
 
+def _print_graph_expansion_trace(trace) -> None:
+    """Print graph expansion trace — entity extraction, Neptune expansion, LanceDB join, rerank survival."""
+    ge = trace.graph_expansion
+    if not ge.enabled:
+        return
+    print(_divider("Graph Expansion", "─", BCYAN))
+    # Neptune availability
+    neptune_str = _c("AVAILABLE", BGREEN) if ge.neptune_available else _c("UNAVAILABLE", YELLOW)
+    print(f"  {_c('Neptune:', DIM)} {neptune_str}")
+    if ge.error:
+        print(f"  {_c('Error:', RED)} {ge.error}")
+        print()
+        return
+
+    # Entity extraction
+    if ge.entities_extracted:
+        ent_strs = []
+        for e in ge.entities_extracted[:8]:
+            text = e.get("text", "?")
+            etype = e.get("type", "")
+            conf = e.get("confidence", 0.0)
+            ent_strs.append(f"{text}({etype},{conf:.1f})")
+        print(f"  {_c('Entities:', DIM)} {', '.join(ent_strs)}")
+
+    # Expansion config
+    print(f"  {_c('Expansion hops:', DIM)} {ge.expansion_hops}")
+    if ge.relation_allowlist:
+        print(f"  {_c('Relation allowlist:', DIM)} {', '.join(ge.relation_allowlist[:6])}")
+
+    # Graph search results
+    print(f"  {_c('Nodes matched:', DIM)} {ge.graph_nodes_matched}")
+    if ge.graph_paths:
+        print(f"  {_c('Graph paths:', DIM)} ({len(ge.graph_paths)} total)")
+        for path in ge.graph_paths[:5]:
+            print(f"    {_c(path, DIM)}")
+        if len(ge.graph_paths) > 5:
+            print(f"    {_c(f'… +{len(ge.graph_paths) - 5} more', DIM)}")
+
+    # Candidate resolution
+    print(f"  {_c('Candidates (raw):', DIM)} {ge.graph_candidates_count}")
+    print(f"  {_c('Candidates (resolved):', DIM)} {ge.graph_candidates_resolved}")
+    print(f"  {_c('New (added):', BGREEN if ge.graph_candidates_new > 0 else DIM)} {ge.graph_candidates_new}")
+    print(f"  {_c('Duplicate (skipped):', DIM)} {ge.graph_candidates_duplicate}")
+
+    # Join methods
+    if ge.join_methods_used:
+        methods_str = ", ".join(f"{k}:{v}" for k, v in ge.join_methods_used.items())
+        print(f"  {_c('Join methods:', DIM)} {methods_str}")
+
+    # Candidate details
+    if ge.candidates:
+        print(f"  {_c('Resolved candidates:', DIM)}")
+        for c in ge.candidates[:8]:
+            cid = c.get("chunk_id", "?")[:25]
+            node_name = c.get("graph_node_name", "?")[:20]
+            node_type = c.get("graph_node_type", "")
+            jm = c.get("join_method", "?")
+            jc = c.get("join_confidence", 0.0)
+            dup = c.get("already_in_initial", False)
+            doc = c.get("document_name", "")[:25]
+            dup_tag = _c(" [DUP]", YELLOW) if dup else ""
+            print(f"    {_c(cid, BWHITE)} {node_name}({node_type}) join={jm}@{jc:.1f} doc={_c(doc, DIM)}{dup_tag}")
+
+    # Rerank survival
+    if ge.graph_candidates_survived_rerank is not None and ge.graph_candidates_new > 0:
+        survived = ge.graph_candidates_survived_rerank
+        total_new = ge.graph_candidates_new
+        if survived > 0:
+            print(f"  {_c('Survived rerank:', BGREEN)} {survived}/{total_new}")
+        else:
+            print(f"  {_c('Survived rerank:', YELLOW)} 0/{total_new} (all filtered by reranker)")
+
+    # Before/after counts
+    if ge.candidates_before_graph or ge.candidates_after_graph:
+        print(f"  {_c('Chunks before graph:', DIM)} {ge.candidates_before_graph} → {_c('after:', DIM)} {ge.candidates_after_graph}")
+    print()
+
+
 def _run_retrieve(query: str, s: _Session) -> None:
     from ..retrieval.hybrid_retriever import hybrid_retrieve
 
@@ -676,6 +754,7 @@ def _run_answer(query: str, s: _Session) -> None:
         _print_rerank_trace(trace.rerank)
     if trace and (s.debug_retrieval or s.show_graph_trace):
         _print_graph_trace(trace.graph)
+        _print_graph_expansion_trace(trace)
 
     _print_chunks(chunks, verbose=s.verbose)
 
