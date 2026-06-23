@@ -430,20 +430,44 @@ This task performed **architecture code review + targeted optimization + validat
 
 ## 9. Test Results Summary
 
+### Relevant tests (optimization-related)
+
 ```
-Command: pytest tests/test_graph_expansion.py tests/test_hybrid_retrieval.py 
-         tests/test_reranker.py tests/test_parsing_pipeline.py 
+Command: pytest tests/test_graph_expansion.py tests/test_hybrid_retrieval.py
+         tests/test_reranker.py tests/test_parsing_pipeline.py
          tests/test_qa_terminal.py::TestGraphExpansionTraceDisplay -q
 
-Result: 152 passed in 4.21s
+Result: 152 passed in 4.12s (0 failures)
 
-Smoke test (answer mode, real Bedrock API):
-  Total: 4 | Success: 4 | Partial: 0 | Errors: 0
-  All checks passed: 4/4
-  Graph candidates survived rerank: 2/4
+Breakdown:
+  test_graph_expansion.py:              44 passed
+  test_hybrid_retrieval.py:             46 passed
+  test_reranker.py:                     16 passed
+  test_parsing_pipeline.py:             42 passed
+  test_qa_terminal.py (TraceDisplay):    3 passed
+  answer_generator (in hybrid):          1 passed
 ```
 
-## 10. Files Modified (cumulative across optimization sessions)
+### Answer-mode smoke test (real Bedrock API)
+
+```
+Total: 4 | Success: 4 | Partial: 0 | Errors: 0
+All checks passed: 4/4
+Graph candidates survived rerank: 2/4
+```
+
+### Full suite known issues
+
+```
+tests/test_qa_terminal.py (full): 43 failed + 3 errors
+  Cause: pre-existing import path failure — tests reference archived
+         standalone CLI module (archive/scripts_legacy/qa_terminal.py)
+         which depends on removed hermes_bedrock_agent.configs.logging
+  Impact: NONE on this work — these failures predate this branch
+  My additions (TestGraphExpansionTraceDisplay): 3 passed
+```
+
+## 10. Files Modified (committed in `c5e5ed2`)
 
 | File | Change |
 | --- | --- |
@@ -451,15 +475,27 @@ Smoke test (answer mode, real Bedrock API):
 | `src/.../retrieval/graph_expansion.py` | Added `_safe_str()`, optimized LanceDB join with filtered query + fallback |
 | `src/.../retrieval/graph_guided_retrieval.py` | Added `_safe_str()`, NaN-safe `_rows_to_retrieved_chunks` and `_row_to_chunk_from_keyword` |
 | `src/.../retrieval/answer_generator.py` | Added `_derive_run_dir()`, Strategy C evidence loading |
+| `src/.../qa/terminal.py` | Added `_print_graph_expansion_trace()` for answer-mode trace display |
 | `tests/test_graph_expansion.py` | Updated mocks for chained query API; added fallback + project_id isolation tests |
+| `tests/test_qa_terminal.py` | Added `TestGraphExpansionTraceDisplay` class (3 tests) |
 | `tests/test_parsing_pipeline.py` | **NEW** — 42 tests for strategy, registry, orchestrator, output writer |
 | `tests/smoke_test_answer_mode.py` | **NEW** — 4 end-to-end smoke tests with real Bedrock API |
+| `docs/DUAL_RAG_ARCHITECTURE_CODE_REVIEW.md` | **NEW** — This architecture review report |
 
 ## 11. Git Status
 
 ```
 Branch: feat/dual-rag-v2-graph-pipeline-qa
-Status: Modified (not committed) — awaiting user review
+Commit: c5e5ed2 feat: improve graph expansion evidence retrieval
+Status: Committed, not pushed
 ```
 
-All changes are validated and ready for commit.
+Remaining unstaged/untracked files (separate work, not part of this commit):
+- `prompts/graph_extraction/manifest.yaml` — v4.5.2 registration (separate feature)
+- `src/hermes_bedrock_agent/prompts/adapters.py` — v4.5.2 adapter mapping (separate feature)
+- `prompts/graph_extraction/v452_semantic_map.md` — v4.5.2 prompt (separate feature)
+- `src/hermes_bedrock_agent/experiments/v452_prompts.py` — v4.5.2 experiment code (separate feature)
+- `rules/` — extraction rules (separate feature)
+- `scripts/` — utility/import scripts (separate work)
+- `tests/smoke_test_answer_mode_results.json` — ephemeral test output
+- `.hermes/` — agent working directory (not versioned)
