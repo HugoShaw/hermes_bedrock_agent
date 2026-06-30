@@ -1,0 +1,231 @@
+{
+  "meta": {
+    "collection": "murata_excel_vlm_dual_rag",
+    "store_path": "/home/ubuntu/projects/data/vector_store/lancedb",
+    "project_ids": [
+      "saimu_bugyo_cloud",
+      "sample_20260529"
+    ]
+  },
+  "lancedb_schema": {
+    "columns": [
+      {
+        "name": "id",
+        "type": "string"
+      },
+      {
+        "name": "text",
+        "type": "string"
+      },
+      {
+        "name": "embedding",
+        "type": "fixed_size_list<item: float>[1024]"
+      },
+      {
+        "name": "chunk_type",
+        "type": "string"
+      },
+      {
+        "name": "sheet_index",
+        "type": "int32"
+      },
+      {
+        "name": "sheet_name",
+        "type": "string"
+      },
+      {
+        "name": "workbook_name",
+        "type": "string"
+      },
+      {
+        "name": "source_pdf_s3_path",
+        "type": "string"
+      },
+      {
+        "name": "source_excel_s3_path",
+        "type": "string"
+      },
+      {
+        "name": "source_markdown_s3_path",
+        "type": "string"
+      },
+      {
+        "name": "systems",
+        "type": "string"
+      },
+      {
+        "name": "apis",
+        "type": "string"
+      },
+      {
+        "name": "related_sheets",
+        "type": "string"
+      },
+      {
+        "name": "project_id",
+        "type": "string"
+      }
+    ]
+  },
+  "chunk_counts": {
+    "saimu_bugyo_cloud": 0,
+    "sample_20260529": 369,
+    "__total__": 801
+  },
+  "project_isolation": {
+    "saimu_bugyo_cloud": {
+      "contamination": [],
+      "is_clean": true
+    },
+    "sample_20260529": {
+      "contamination": [],
+      "is_clean": true
+    }
+  },
+  "neptune_counts": {
+    "error": "Neptune unreachable: cannot import name 'GraphGuidedRetriever' from 'hermes_bedrock_agent.retrieval.graph_guided_retrieval' (/home/ubuntu/projects/hermes_bedrock_agent/src/hermes_bedrock_agent/retrieval/graph_guided_retrieval.py)"
+  },
+  "qa_snapshot": {
+    "saimu_bugyo_cloud": {
+      "データ連携の方法を教えてください": [],
+      "システム構成図について説明してください": [],
+      "エラーが発生した場合の対処法": []
+    },
+    "sample_20260529": {
+      "データ連携の方法を教えてください": [
+        {
+          "id": "sheet19_chunk006_7c18c4e3529d",
+          "distance": 1.3861110210418701,
+          "chunk_type": "data_condition",
+          "sheet_name": "データ取得条件（納品明細）",
+          "text_preview": "## 5. Recommended Follow-up\n\n\nThe following sheets should be cross-referenced for complete picture:\n\n- **レスポンスマッピング sheet** → for response field mapping\n- **フィルタ条件 sheet** → for record filtering logic"
+        },
+        {
+          "id": "sheet21_chunk000_ff22c7ce233a",
+          "distance": 1.3873645067214966,
+          "chunk_type": "data_condition",
+          "sheet_name": "データ取得条件（発注明細）",
+          "text_preview": "## Overview\n\n\nBased on the visible content in this sheet, the information is quite limited/small. Let me extract what is visible:\n\n---"
+        },
+        {
+          "id": "sheet17_chunk000_2aa4799a9e0c",
+          "distance": 1.3936091661453247,
+          "chunk_type": "data_condition",
+          "sheet_name": "データ取得条件（納品一覧取得）",
+          "text_preview": "## 1. API Overview\n\n\n| Item | Details |\n|------|---------|\n| **API Name** | 納品一覧取得 (Delivery List Retrieval) |\n| **System** | ANDPAD → SAP S4/HANA (via DataSpider) |\n| **Data Format** | ANDPAD-SYSTEM "
+        },
+        {
+          "id": "sheet23_chunk000_a7b6da117ceb",
+          "distance": 1.3987157344818115,
+          "chunk_type": "data_condition",
+          "sheet_name": "データ取得条件（発注一覧取得）",
+          "text_preview": "## 1. API Overview\n\n\n| Item | Details |\n|------|---------|\n| **API Name** | 発注一覧取得 (Purchase Order List Retrieval) |\n| **System** | ANDPAD → SAP S4/HANA via DataSpider |\n| **Direction** | ANDPAD API →"
+        },
+        {
+          "id": "sheet21_chunk001_fffb3d522702",
+          "distance": 1.4011551141738892,
+          "chunk_type": "data_condition",
+          "sheet_name": "データ取得条件（発注明細）",
+          "text_preview": "### Sheet Title\n\n**データ取得条件（発注明細）** = Data Retrieval Conditions (Order Line Items / Purchase Order Details)\n\n---"
+        }
+      ],
+      "システム構成図について説明してください": [
+        {
+          "id": "sheet04_chunk001_d36fc8658529",
+          "distance": 1.3745923042297363,
+          "chunk_type": "business_rule",
+          "sheet_name": "マッピングシート（SAP→中間F）",
+          "text_preview": "### シート全体の構造サマリー\n\n\n```\nマッピングシート（SAP→中間F）\n├── ヘッダーレコード（Header Record）\n│   ├── SAP側フィールド群（左テーブル）         ← Tile 1 上部\n│   ├── マッピング・変換ルール列（中間列）        ← Tile 2 上部\n│   └── 中間F側フィールド群（右テーブル）        ← Tile "
+        },
+        {
+          "id": "sheet10_chunk017_0395ae16e026",
+          "distance": 1.457846760749817,
+          "chunk_type": "mapping_table",
+          "sheet_name": "マッピングシート（中間F→発注中間F）【変更】",
+          "text_preview": "### 7-2. レコード構成に関するルール\n\n\n| レコード種別 | 必須キー項目 | 備考 |\n|------------|------------|------|\n| ヘッダーレコード | レコード区分、発注番号、発注明細番号、変更番号 | 4項目が必須（○） |\n| 明細レコード | レコード区分、発注番号、発注明細番号、変更番号 | 4項目が必須（○） |\n| フッターレコード | 不明"
+        },
+        {
+          "id": "sheet11_chunk002_7827f52be7ef",
+          "distance": 1.4651888608932495,
+          "chunk_type": "mapping_table",
+          "sheet_name": "マッピングシート（発注中間F→Andpad）【変更】 ",
+          "text_preview": "### ファイル構造概要\n\n\n本シートは以下の2レコード区分で構成される：\n\n| レコード区分 | 内容 |\n|------------|------|\n| ヘッダー部（Header） | 発注ヘッダー情報（発注番号・発注先・工事コード・金額・日付等） |\n| 明細部（Detail） | 発注明細情報（明細番号・品名・数量・単価・金額・工種/費目/内訳コード等） |\n\n---"
+        },
+        {
+          "id": "sheet20_chunk011_789212c9f49b",
+          "distance": 1.466423749923706,
+          "chunk_type": "mapping_table",
+          "sheet_name": "マッピングシート（納品明細）",
+          "text_preview": "### 確認済みの構造的事実\n\n- **必須フィールド（○マーク）**: 会社コード、購買伝票番号、購買伝票明細、納品伝票番号（No.1〜4）が必須項目として確認\n- **レコード区分**: ヘッダー・明細・（フッター）の複数レコード区分が存在\n- **DataSpider使用**: SAP S/4HANAとANDPAD間のETL/EAI処理にDataSpiderを使用"
+        },
+        {
+          "id": "sheet12_chunk015_8f764ce9dd65",
+          "distance": 1.4753049612045288,
+          "chunk_type": "mapping_table",
+          "sheet_name": "マッピングシート（請負済のデータ編集）",
+          "text_preview": "### 7-2. レコード構造ルール\n\n\n| ルール | 内容 |\n|--------|------|\n| 親子構造 | ヘッダレコード（案件）と明細レコード（工事明細）の親子構造を維持する |\n| 必須項目 | 案件ID・請負済フラグ（ヘッダ）、明細No（明細）は必須項目 |\n| 複数フォーム対応 | 4種類のフォームパターンに対応した処理を実施（フォーム1〜4） |"
+        }
+      ],
+      "エラーが発生した場合の対処法": [
+        {
+          "id": "sheet03_chunk012_5fa707434be1",
+          "distance": 1.0457547903060913,
+          "chunk_type": "api_spec",
+          "sheet_name": "DataSpider開発仕様",
+          "text_preview": "### 7-2. エラー時の継続処理ルール\n\n\n| ルール | 内容 |\n|--------|------|\n| 途中伝票でエラー発生 | 処理を中断せず**全伝票の処理を継続** |\n| SAP→中間変換エラーの伝票 | API実行対象外（スキップ） |\n| 伝票単位でないエラー | `conv_result.txt` には出力しない、通常エラーとして処理 |"
+        },
+        {
+          "id": "sheet03_chunk013_ae9690063bd0",
+          "distance": 1.2670979499816895,
+          "chunk_type": "business_rule",
+          "sheet_name": "DataSpider開発仕様",
+          "text_preview": "### 7-3. エラーハンドリング一覧\n\n\n| エラー種別 | 条件 | 出力先 | メッセージ | 処理 |\n|---|---|---|---|---|\n| コード変換エラー | コード変換失敗時 | `conv_result.txt` | （現状コード変換未実施だが出力する作りとする） | 継続 |\n| ファイル書込みエラー等 | 伝票単位でないエラー | 出力しない | — | 通常エラー"
+        },
+        {
+          "id": "sheet16_chunk011_e819361b88fc",
+          "distance": 1.4891126155853271,
+          "chunk_type": "business_rule",
+          "sheet_name": "マッピングシート（請負済のキャンセル）",
+          "text_preview": "## 7. Business Rules / Special Logic\n\n\n> ⚠️ **Not recoverable** from available tile data. The following are inferred from the sheet's business context:"
+        },
+        {
+          "id": "sheet13_chunk011_ba3589d6dc0d",
+          "distance": 1.4971861839294434,
+          "chunk_type": "api_spec",
+          "sheet_name": "マッピングシート（中間F→Andpad）【納品キャンセル】",
+          "text_preview": "### 7-2. 処理フロー（推定）\n\n\n```\n中間ファイル受信\n    ↓\nレコード区分判定（ヘッダー部 / 明細部）\n    ↓\nキャンセル数量チェック\n    ├─ キャンセル数量 > 0 → キャンセル区分 = \"1\" セット\n    └─ キャンセル数量 = 0 → （処理内容不明）\n    ↓\nステータス固定値セット（キャンセル用）\n    ↓\nANDPAD API送信（DataSp"
+        },
+        {
+          "id": "sheet16_chunk009_eeeb9086bd18",
+          "distance": 1.500925064086914,
+          "chunk_type": "mapping_table",
+          "sheet_name": "マッピングシート（請負済のキャンセル）",
+          "text_preview": "## 6. Conversion Rules\n\n\n> ⚠️ **Not recoverable** from available tile data. No conversion rule columns (変換ルール, コード変換, etc.) were legible across any tile."
+        }
+      ]
+    }
+  },
+  "test_suite": {
+    "skipped": true
+  },
+  "chunker_snapshot": {
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_HULFT Squareアプリケーション仕様書_債務奉行クラウド/vlm_parsed": "45882511772069eb23cae12836a78be4a46b9abea04dba5b5ff321814114286f",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_アプリケーション概要_債務奉行クラウド/vlm_parsed": "59c1cbb3ac5f294c81027c46b857de831c723c1087fe6a5bc0d11b64f5c16eaf",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_スクリプト試験票_債務奉行_export_debt_slip/vlm_parsed": "008596b452fe2dea63ba045d66d0352dfcbda2b71ab678d858a15f407da3b7c9",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_スクリプト試験票_債務奉行_import_buy_slip/vlm_parsed": "3db6162b80e501046e47aa04ea8cb8ad707d0cf7c4cf72e303614daa1e480424",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_スクリプト試験票_債務奉行_import_buy_slip_result/vlm_parsed": "effe42b7ad7c2ae6996571d6828c83e3d9ea80789a20f65d3b3ff0578f74148a",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_スクリプト試験票_債務奉行_export_debt_slip/vlm_parsed": "56c7bf5013e83fbc1a7aafe54c9405622ca0365e895303722ef76eeb33e7a576",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_スクリプト試験票_債務奉行_import_buy_slip/vlm_parsed": "b75111e2434ce15bb9bb6f8ac373473f4e06d55ec1f317d2ecb9d0f978d37b04",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_スクリプト試験票_債務奉行_import_buy_slip_result/vlm_parsed": "718baa426e65571065c530b9e93ff68ab12a8c7412d658302c260bf8c2807782",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_試験結果_債務奉行_export_debt_slip/vlm_parsed": "61824b7f0cc1d7f32585819af05723fa2d3482b6fee46854d35c9753332ebdb1",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_試験結果_債務奉行_import_buy_slip/vlm_parsed": "3ba3bb01f2a41f402a9bd59b75c8610c3b4b75b495ce5568ebd154031e0b5d30",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_試験結果_債務奉行_import_buy_slip_result/vlm_parsed": "9a870c1e60164303c6562b51ed75eee9ecfcd99b8db6673724f67cc28dd293f0",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_アプリケーション概要/vlm_parsed": "ce4937ea76162d7392fa54cd559c29d6b6e799d1e95812139ac19553bab6c3bf",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/FY2024_レビュー記録表_債務奉行クラウド_アプリケーション仕様書/vlm_parsed": "548a9fc24b3c57a956498b547d20bbccfd55e1511d400398fe54bd966e98df77",
+    "outputs/14_債務奉行クラウド/run_20260602_072107/債務_APIデータ形式/vlm_parsed": "3257c7f8ec1dfa69c0fa1c03e176fcdc4fadf3ead219c31925a0eb61c642a376",
+    "outputs/サンプル20260519/run_20260602_074637/MW_IFマッピング定義書_205_発注情報(登録・変更・取消)/vlm_parsed": "a691d7aedb633a48e6f07148eaae5902bdf676e590f51749df7e2ed79e7b3ffc",
+    "outputs/サンプル20260519/run_20260602_074637/M社様_DSSスクリプト改修概要_フローチャート/vlm_parsed": "946938d53dd81c9262ba98d11a0fb18b9632e4b04415d50fd1bf852ea3a4a466",
+    "outputs/サンプル20260529/wb1_flowchart/vlm_parsed": "5decf8beb967624d7771dca1be76b541c217191054518eede265bd5b89737681",
+    "outputs/サンプル20260529/wb2_mapping/vlm_parsed": "717721712dbf1c018ae998e130ad34d7b2712cedb2405f52d4540f4bc1ee61ec"
+  }
+}

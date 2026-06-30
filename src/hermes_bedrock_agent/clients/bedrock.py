@@ -3,10 +3,54 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from typing import Any, Optional
 
 import boto3
 from botocore.config import Config
+
+logger = logging.getLogger(__name__)
+
+# Thread-based timeout to guard against Bedrock converse() hanging indefinitely.
+# botocore read_timeout can fail to fire in ap-northeast-1 with large payloads.
+# SIGALRM cannot interrupt C-level blocking socket reads in urllib3, so we use
+# concurrent.futures to abandon stuck threads instead.
+_CONVERSE_TIMEOUT_SEC = 180
+
+
+class _ConverseTimeout(Exception):
+    """Raised when a converse() call exceeds the thread-based deadline."""
+
+
+# Single-thread pool — we reuse it across calls but each call gets a fresh future.
+# daemon=True ensures abandoned threads don't block process exit.
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="converse_timeout")
+
+
+def _converse_with_timeout(client, **kwargs):
+    """Wrap client.converse() with a thread-based timeout and one retry.
+
+    Uses concurrent.futures to submit the call to a background thread.
+    If the thread doesn't return within _CONVERSE_TIMEOUT_SEC, we abandon it
+    (the thread may eventually complete or be killed at process exit).
+    """
+    for attempt in range(2):
+        future = _executor.submit(client.converse, **kwargs)
+        try:
+            response = future.result(timeout=_CONVERSE_TIMEOUT_SEC)
+            return response
+        except FuturesTimeoutError:
+            future.cancel()  # best-effort; thread may still be blocked
+            logger.warning(
+                "converse() timed out after %ds (attempt %d/2) — thread abandoned",
+                _CONVERSE_TIMEOUT_SEC, attempt + 1,
+            )
+            if attempt == 1:
+                raise _ConverseTimeout(
+                    f"converse() exceeded {_CONVERSE_TIMEOUT_SEC}s on both attempts"
+                )
+    raise _ConverseTimeout("converse() timed out after all retries")
 
 
 def make_bedrock_client(region: str = "ap-northeast-1") -> Any:
@@ -32,13 +76,33 @@ def converse_text(
     prompt: str,
     max_tokens: int = 12000,
     temperature: float = 0.1,
+    fallback_model_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """Text-only Converse call. Returns (response_text, usage_dict)."""
-    response = client.converse(
-        modelId=model_id,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
-    )
+    messages = [{"role": "user", "content": [{"text": prompt}]}]
+    inference_config = {"maxTokens": max_tokens, "temperature": temperature}
+    try:
+        response = _converse_with_timeout(
+            client,
+            modelId=model_id,
+            messages=messages,
+            inferenceConfig=inference_config,
+        )
+    except Exception as primary_err:
+        if not fallback_model_id:
+            raise
+        err_desc = str(primary_err)
+        logger.warning(
+            "Primary model %s failed (%s), falling back to %s",
+            model_id, err_desc, fallback_model_id,
+        )
+        response = _converse_with_timeout(
+            client,
+            modelId=fallback_model_id,
+            messages=messages,
+            inferenceConfig=inference_config,
+        )
+        logger.info("Fallback model %s succeeded", fallback_model_id)
     text = "".join(
         block["text"]
         for block in response["output"]["message"]["content"]
@@ -54,6 +118,7 @@ def converse_multimodal(
     prompt: str,
     max_tokens: int = 12000,
     temperature: float = 0.1,
+    fallback_model_id: Optional[str] = None,
 ) -> tuple[str, dict]:
     """Multimodal Converse call with one or more images.
 
@@ -72,11 +137,30 @@ def converse_multimodal(
         )
     content.append({"text": prompt})
 
-    response = client.converse(
-        modelId=model_id,
-        messages=[{"role": "user", "content": content}],
-        inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
-    )
+    messages = [{"role": "user", "content": content}]
+    inference_config = {"maxTokens": max_tokens, "temperature": temperature}
+    try:
+        response = _converse_with_timeout(
+            client,
+            modelId=model_id,
+            messages=messages,
+            inferenceConfig=inference_config,
+        )
+    except Exception as primary_err:
+        if not fallback_model_id:
+            raise
+        err_desc = str(primary_err)
+        logger.warning(
+            "Primary model %s failed (%s), falling back to %s",
+            model_id, err_desc, fallback_model_id,
+        )
+        response = _converse_with_timeout(
+            client,
+            modelId=fallback_model_id,
+            messages=messages,
+            inferenceConfig=inference_config,
+        )
+        logger.info("Fallback model %s succeeded", fallback_model_id)
     text = "".join(
         block["text"]
         for block in response["output"]["message"]["content"]
@@ -92,14 +176,29 @@ def converse_with_system(
     messages: list[dict],
     max_tokens: int = 4096,
     temperature: float = 0.2,
+    fallback_model_id: Optional[str] = None,
 ) -> dict:
     """Full Converse call with system prompt. Returns the raw response dict."""
-    return client.converse(
+    kwargs = dict(
         modelId=model_id,
         messages=messages,
         system=system,
         inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
     )
+    try:
+        return _converse_with_timeout(client, **kwargs)
+    except Exception as primary_err:
+        if not fallback_model_id:
+            raise
+        err_desc = str(primary_err)
+        logger.warning(
+            "Primary model %s failed (%s), falling back to %s",
+            model_id, err_desc, fallback_model_id,
+        )
+        kwargs["modelId"] = fallback_model_id
+        response = _converse_with_timeout(client, **kwargs)
+        logger.info("Fallback model %s succeeded", fallback_model_id)
+        return response
 
 
 def embed_text(

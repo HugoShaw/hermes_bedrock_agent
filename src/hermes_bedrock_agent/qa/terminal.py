@@ -115,6 +115,19 @@ class _Session:
         self.catalog: list[dict] = []
         self.catalog_dir: Optional[Path] = None
         self.project_id: str = ""
+        # Debug/trace flags
+        self.debug_retrieval: bool = False
+        self.show_vector_trace: bool = False
+        self.show_graph_trace: bool = False
+        self.show_context: bool = False
+        self.strict_isolation: bool = False
+        self.graph_confidence_threshold: float = 0.0
+        self.disable_keyword_boost: bool = False
+        self.vector_only: bool = False
+        self.rerank_override: Optional[bool] = None
+        self.last_trace: Optional["RetrievalTrace"] = None
+        self.graph_format: str = "compact"  # compact | table | network | raw
+        self.last_dual_graph = None  # for /save-graph export
 
 
 def _load_catalog(catalog_dir: Optional[Path]) -> list[dict]:
@@ -170,34 +183,49 @@ def _print_chunks(chunks, verbose: bool = False) -> None:
         print()
 
 
-def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW) -> None:
+def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW, neptune_available: bool = True,
+                 *, graph_format: str = "compact", show_raw_ids: bool = False) -> None:
+    from .graph_display import format_graph
+
     print(_divider(title, "━", color))
-    if not gc or (not gc.nodes and not gc.edges):
-        print(_c("  (No graph context — Neptune not configured)", DIM))
+    if gc is None:
+        if not neptune_available:
+            print(_c("  (Neptune not available or not configured)", DIM))
+        else:
+            print(_c("  (No matching nodes found for this project)", DIM))
+        print()
+        return
+    if not gc.nodes and not gc.edges:
+        print(_c("  (No matching nodes found for this project)", DIM))
         print()
         return
     print(f"  {_c(f'Nodes: {len(gc.nodes)}', BYELLOW)}  {_c(f'Edges: {len(gc.edges)}', YELLOW)}")
-    for node in gc.nodes[:10]:
-        props = node.get("properties", {})
-        name = props.get("name", props.get("sheet_name", ""))
-        suffix = f" — {name}" if name else ""
-        print(f"  {_c('●', YELLOW)} [{node.get('label', '')}] {node.get('id', '?')}{suffix}")
-    if len(gc.nodes) > 10:
-        print(_c(f"    … {len(gc.nodes) - 10} more nodes", DIM))
-    for edge in gc.edges[:10]:
-        print(f"  {_c('→', CYAN)} {edge.get('from', '?')} --{edge.get('relationship', '?')}--> {edge.get('to', '?')}")
-    if len(gc.edges) > 10:
-        print(_c(f"    … {len(gc.edges) - 10} more edges", DIM))
+
+    lines = format_graph(
+        gc.nodes, gc.edges,
+        fmt=graph_format,
+        show_raw_ids=show_raw_ids,
+        max_edges=30,
+    )
+    for line in lines:
+        print(_c(line, CYAN) if line.startswith("  →") or line.startswith("    raw:") else line)
     print()
 
 
-def _print_dual_graph(dual) -> None:
+def _print_dual_graph(dual, neptune_available: bool = True,
+                      *, graph_format: str = "compact", show_raw_ids: bool = False) -> None:
     """Print two-layer graph context."""
-    if dual is None or dual.is_empty:
-        _print_graph(None)
+    if dual is None:
+        _print_graph(None, neptune_available=neptune_available)
         return
-    _print_graph(dual.business, "Business Semantic Graph", BYELLOW)
-    _print_graph(dual.implementation, "Implementation Graph", BCYAN)
+    if dual.is_empty:
+        _print_graph(None, "Business Semantic Graph", BYELLOW, neptune_available=True)
+        _print_graph(None, "Implementation Graph", BCYAN, neptune_available=True)
+        return
+    _print_graph(dual.business, "Business Semantic Graph", BYELLOW,
+                 graph_format=graph_format, show_raw_ids=show_raw_ids)
+    _print_graph(dual.implementation, "Implementation Graph", BCYAN,
+                 graph_format=graph_format, show_raw_ids=show_raw_ids)
 
 
 def _print_evidence_flow(chunks, dual_graph, evidence_images, elapsed: float, project_id: str = "") -> None:
@@ -225,6 +253,184 @@ def _print_evidence_flow(chunks, dual_graph, evidence_images, elapsed: float, pr
     else:
         print(f"  {_c('④ Visual evidence:', BWHITE)} (none loaded)")
     print(f"  {_c('Total retrieval time:', DIM)} {elapsed:.1f}s")
+    print()
+
+
+def _filter_graph_by_confidence(dual_graph, threshold: float):
+    """Filter graph edges below confidence threshold.
+
+    Status confidence mapping (higher = more confident):
+        CONFIRMED = 1.0, CANDIDATE = 0.6, POSSIBLY_RELATED = 0.3, NEEDS_REVIEW = 0.1
+    Edges without status are treated as 0.5 (pass at default thresholds).
+    """
+    _STATUS_SCORES = {
+        "CONFIRMED": 1.0,
+        "CANDIDATE": 0.6,
+        "POSSIBLY_RELATED": 0.3,
+        "NEEDS_REVIEW": 0.1,
+    }
+
+    def _passes(edge: dict) -> bool:
+        status = (edge.get("properties") or {}).get("status", "")
+        score = _STATUS_SCORES.get(status.upper(), 0.5)
+        return score >= threshold
+
+    # Filter both layers in-place (create new GraphContext objects)
+    from ..knowledge_base.schemas import GraphContext
+
+    biz = dual_graph.business
+    impl = dual_graph.implementation
+
+    filtered_biz_edges = [e for e in biz.edges if _passes(e)]
+    filtered_impl_edges = [e for e in impl.edges if _passes(e)]
+
+    removed = (len(biz.edges) - len(filtered_biz_edges)) + (len(impl.edges) - len(filtered_impl_edges))
+    if removed > 0:
+        print(f"  {_c(f'⚠ Filtered {removed} low-confidence edge(s) (threshold={threshold})', BYELLOW)}")
+
+    dual_graph.business = GraphContext(nodes=biz.nodes, edges=filtered_biz_edges)
+    dual_graph.implementation = GraphContext(nodes=impl.nodes, edges=filtered_impl_edges)
+    return dual_graph
+
+
+def _print_vector_trace(trace) -> None:
+    """Print vector retrieval trace details."""
+    print(_divider("Vector Trace", "─", CYAN))
+    print(f"  {_c('Collection:', DIM)} {trace.collection}")
+    print(f"  {_c('Project filter:', DIM)} {trace.project_filter or '(none)'}")
+    if trace.sheet_filter:
+        print(f"  {_c('Sheet filter:', DIM)} {trace.sheet_filter}")
+    print(f"  {_c('Embedding model:', DIM)} {trace.embedding_model}")
+    print(f"  {_c('Embedding latency:', DIM)} {trace.embedding_latency_ms:.1f}ms")
+    print(f"  {_c('Search latency:', DIM)} {trace.search_latency_ms:.1f}ms")
+    print(f"  {_c('Raw results:', DIM)} {trace.raw_results_count}")
+    print(f"  {_c('Final chunks:', DIM)} {trace.final_chunks_count}")
+    if trace.raw_results:
+        print(f"  {_c('Top results (id / distance):', DIM)}")
+        for r in trace.raw_results[:5]:
+            dist = r.get("_distance", 0.0)
+            rid = r.get("id", "?")[:40]
+            ctype = r.get("chunk_type", "")
+            print(f"    {_c(rid, BWHITE)}  dist={dist:.4f}  type={ctype}")
+    if trace.keyword_boost_skipped:
+        print(f"  {_c('Keyword boost:', BYELLOW)} DISABLED (--disable-keyword-boost)")
+    elif trace.keyword_boost_applied:
+        print(f"  {_c('Keyword boost applied:', DIM)} {len(trace.keyword_boost_applied)} chunk(s)")
+        for b in trace.keyword_boost_applied[:5]:
+            cid = b.get("chunk_id", "?")[:30]
+            boost_val = b.get("boost", 0)
+            kws = ", ".join(b.get("keywords_matched", [])[:3])
+            print(f"    {_c(cid, DIM)} +{boost_val:.4f} [{kws}]")
+    print()
+
+
+def _print_graph_trace(trace) -> None:
+    """Print graph retrieval trace details."""
+    print(_divider("Graph Trace", "─", YELLOW))
+    if trace.query_terms:
+        terms_str = ", ".join(trace.query_terms[:8])
+        print(f"  {_c('Query terms:', DIM)} {terms_str}")
+    print(f"  {_c('Hint quality:', DIM)} {_c(trace.hint_quality.upper(), BGREEN if trace.hint_quality == 'strong' else BYELLOW if trace.hint_quality == 'weak' else DIM)}")
+    if trace.hint_quality_reason:
+        print(f"  {_c('Reason:', DIM)} {trace.hint_quality_reason}")
+    if trace.sheet_expansion:
+        print(f"  {_c('Sheet expansion:', DIM)} {trace.sheet_expansion}")
+    if trace.system_expansion:
+        print(f"  {_c('System expansion:', DIM)} {', '.join(trace.system_expansion)}")
+    print(f"  {_c('Business layer:', DIM)} {trace.business_nodes} nodes, {trace.business_edges} edges")
+    print(f"  {_c('Implementation layer:', DIM)} {trace.implementation_nodes} nodes, {trace.implementation_edges} edges")
+    print(f"  {_c('Graph latency:', DIM)} {trace.graph_latency_ms:.1f}ms")
+    if trace.edge_confidence_summary:
+        print(f"  {_c('Edge confidence:', DIM)}")
+        for status, count in trace.edge_confidence_summary.items():
+            if count > 0:
+                color = BGREEN if status == "confirmed" else (YELLOW if status == "no_status" else RED)
+                print(f"    {_c(status, color)}: {count}")
+    if trace.low_confidence_edges:
+        print(f"  {_c('Low-confidence edges:', YELLOW)} {len(trace.low_confidence_edges)}")
+        for e in trace.low_confidence_edges[:5]:
+            rel = e.get("relationship", "?")
+            src = e.get("from", "?")[:20]
+            tgt = e.get("to", "?")[:20]
+            props = e.get("properties", {})
+            status = props.get("status", props.get("confidence_status", "?"))
+            print(f"    {_c(src, DIM)} --{rel}--> {_c(tgt, DIM)} [{status}]")
+    print()
+
+
+def _print_timing_trace(trace) -> None:
+    """Print per-stage timing breakdown."""
+    print(_divider("Timing Breakdown", "─", BGREEN))
+    stages = [
+        ("Graph exploration", trace.graph_exploration_ms),
+        ("Graph context build", trace.graph_context_build_ms),
+        ("Vector embedding", trace.vector_embedding_ms),
+        ("Vector search", trace.vector_search_ms),
+        ("Merge + boost", trace.merge_boost_ms),
+        ("Evidence images", trace.evidence_images_ms),
+        ("Answer generation", trace.answer_generation_ms),
+    ]
+    for label, ms in stages:
+        if ms > 0:
+            bar_len = min(30, int(ms / 100))
+            bar = "█" * max(1, bar_len)
+            print(f"  {_c(label.ljust(22), DIM)} {_c(bar, CYAN)} {ms:.0f}ms")
+    print(f"  {_c('Total'.ljust(22), BWHITE)} {trace.total_ms:.0f}ms")
+    print()
+
+
+def _print_isolation_status(trace, strict: bool) -> None:
+    """Print project isolation check results."""
+    print(_divider("Project Isolation", "─", BYELLOW if trace.violations_count else BGREEN))
+    print(f"  {_c('Project:', DIM)} {trace.project_id or '(none)'}")
+    if not trace.project_id:
+        print(f"  {_c('No project filter — isolation check skipped', DIM)}")
+        print()
+        return
+    no_pid_count = len(trace.graph_nodes_without_project_id)
+    if no_pid_count:
+        print(f"  {_c('Nodes without project_id:', YELLOW)} {no_pid_count}")
+        for n in trace.graph_nodes_without_project_id[:5]:
+            print(f"    {_c(n.get('label', '?'), DIM)} {n.get('id', '?')[:30]}")
+    if trace.cross_project_nodes:
+        label = "VIOLATION" if strict else "WARNING"
+        color = RED if strict else YELLOW
+        print(f"  {_c(f'Cross-project nodes ({label}):', color)} {len(trace.cross_project_nodes)}")
+        for n in trace.cross_project_nodes[:5]:
+            node_pid = n.get("project_id", "?")
+            print(f"    {_c(n.get('label', '?'), DIM)} {n.get('id', '?')[:30]} (project: {node_pid})")
+    if trace.violations_count == 0 and no_pid_count == 0:
+        print(f"  {_c('All nodes properly isolated', BGREEN)}")
+    print()
+
+
+def _print_context_summary(chunks, dual_graph, trace) -> None:
+    """Print assembled context overview before LLM call."""
+    print(_divider("Context Assembly", "━", BCYAN))
+    total_chars = sum(len(c.content) for c in chunks)
+    print(f"  {_c('Chunks:', BWHITE)} {len(chunks)} ({total_chars:,} chars)")
+    sheet_set = sorted({c.sheet_index for c in chunks if c.sheet_index > 0})
+    if sheet_set:
+        print(f"  {_c('Sheets covered:', DIM)} {sheet_set}")
+    type_counts: dict = {}
+    for c in chunks:
+        type_counts[c.chunk_type] = type_counts.get(c.chunk_type, 0) + 1
+    if type_counts:
+        types_str = ", ".join(f"{k}:{v}" for k, v in sorted(type_counts.items()))
+        print(f"  {_c('Chunk types:', DIM)} {types_str}")
+    if dual_graph and not dual_graph.is_empty:
+        total_nodes = len(dual_graph.business.nodes) + len(dual_graph.implementation.nodes)
+        total_edges = len(dual_graph.business.edges) + len(dual_graph.implementation.edges)
+        print(f"  {_c('Graph context:', BWHITE)} {total_nodes} nodes, {total_edges} edges")
+    else:
+        print(f"  {_c('Graph context:', DIM)} (none)")
+    if trace and trace.graph.edge_confidence_summary:
+        summary = trace.graph.edge_confidence_summary
+        confirmed = summary.get("confirmed", 0)
+        total_edges_count = sum(summary.values())
+        if total_edges_count > 0:
+            pct = confirmed / total_edges_count * 100
+            print(f"  {_c('Edge confidence:', DIM)} {confirmed}/{total_edges_count} confirmed ({pct:.0f}%)")
     print()
 
 
@@ -257,6 +463,14 @@ def _cmd_help() -> None:
         ("/topk N",                       "Set top-K results (1–20, default 5)"),
         ("/verbose",                      "Toggle full chunk content display"),
         ("/evidence",                     "Toggle evidence image loading"),
+        ("/trace",                        "Toggle full retrieval trace"),
+        ("/rerank [on|off]",              "Toggle reranking (Bedrock rerank-v1)"),
+        ("/vector-only",                  "Toggle vector-only mode (skip graph)"),
+        ("/graph-format [compact|table|network|raw]", "Change graph display format"),
+        ("/save-graph [path]",            "Export last graph as Mermaid .mmd"),
+        ("/save-trace [path]",            "Save last retrieval trace as JSON"),
+        ("/ask-file <path>",              "Read query from a text file"),
+        ("/isolation",                    "Show last isolation check status"),
         ("/history",                      "Show recent query history"),
         ("/last",                         "Repeat the last query"),
         ("/stats",                        "Show session statistics"),
@@ -267,9 +481,10 @@ def _cmd_help() -> None:
         ("/quit  or  /exit",              "Exit the terminal"),
     ]
     for cmd, desc in cmds:
-        print(f"  {_c(cmd.ljust(32), BCYAN)} {_c(desc, DIM)}")
+        print(f"  {_c(cmd.ljust(42), BCYAN)} {_c(desc, DIM)}")
     print()
     print(_c("  Any text without / is treated as a QA query in the current mode.", DIM))
+    print(_c("  Triple-quote block: start with \"\"\" and end with \"\"\" for multiline queries.", DIM))
     print()
 
 
@@ -327,59 +542,280 @@ def _cmd_sheet(idx: int, s: _Session) -> None:
     print()
 
 
+def _print_rerank_trace(trace) -> None:
+    """Print reranking trace details."""
+    print(_divider("Rerank", "─", BCYAN))
+    enabled_str = "true" if trace.enabled else "false"
+    print("  Enabled: {} | Model: {}".format(
+        _c(enabled_str, BGREEN if trace.enabled else DIM), trace.model_id or "(none)"))
+    if not trace.enabled:
+        print()
+        return
+    if trace.error:
+        print("  {} {}".format(_c("Fallback:", YELLOW), trace.error))
+    print("  Candidates: {} -> Final: {} | Latency: {:.0f}ms".format(
+        trace.candidate_count, trace.final_count, trace.latency_ms))
+    if trace.rank_comparison:
+        print()
+        print("  Rank comparison:")
+        for item in trace.rank_comparison[:10]:
+            chunk_id_short = item.get("chunk_id", "?")[:25]
+            ctype = item.get("chunk_type", "")
+            doc_name = item.get("document_name", "")[:30]
+            hybrid_rank = item.get("hybrid_rank", 0)
+            rerank_rank = item.get("rerank_rank", 0)
+            rerank_score = item.get("rerank_score", 0.0)
+            print("  #{} (was #{}) score={:.4f} {} [{}] {}".format(
+                rerank_rank, hybrid_rank, rerank_score,
+                _c(chunk_id_short, BWHITE), _c(ctype, DIM), _c(doc_name, DIM)))
+    print()
+
+
+def _print_hybrid_trace(result) -> None:
+    """Display hybrid retrieval pipeline debug info."""
+    from ..retrieval.hybrid_retriever import HybridResult
+    if not isinstance(result, HybridResult):
+        return
+    print(_c("  ── Hybrid Retrieval Pipeline ──", CYAN))
+    if result.rewritten:
+        rw = result.rewritten
+        print(f"    Normalized query: {rw.normalized}")
+        intent = rw.intent
+        label = intent.label
+        conf = intent.confidence
+        print(f"    Intent: {label} (confidence={conf:.2f})")
+        print(f"    Business query:  {rw.business_query[:80]}")
+        print(f"    Technical query: {rw.technical_query[:80]}")
+        print(f"    Keyword query:   {rw.keyword_query[:80]}")
+    print(f"    Vector hits:  {len(result.vector_hits)}")
+    print(f"    Keyword hits: {len(result.keyword_hits)}")
+    print(f"    Merged (dedup): {result.merged_count} (removed {result.dedup_removed} duplicates)")
+    print(f"    Final chunks:   {len(result.chunks)}")
+    print()
+
+
+def _print_hybrid_trace_from_retrieval_trace(trace) -> None:
+    """Display hybrid pipeline info from a RetrievalTrace (answer mode)."""
+    ht = trace.hybrid
+    if not ht.normalized_query:
+        return
+    print(_c("  ── Hybrid Pipeline (answer mode) ──", CYAN))
+    print("    Normalized: {}".format(ht.normalized_query))
+    print("    Intent: {} (confidence={:.2f})".format(ht.intent_label, ht.intent_confidence))
+    print("    Keyword query: {}".format(ht.keyword_query))
+    print("    Keyword hits: {}".format(ht.keyword_hits_count))
+    print("    Dedup removed: {}".format(ht.dedup_removed))
+    print()
+
+
+def _print_graph_expansion_trace(trace) -> None:
+    """Print graph expansion trace — entity extraction, Neptune expansion, LanceDB join, rerank survival."""
+    ge = trace.graph_expansion
+    if not ge.enabled:
+        return
+    print(_divider("Graph Expansion", "─", BCYAN))
+    # Neptune availability
+    neptune_str = _c("AVAILABLE", BGREEN) if ge.neptune_available else _c("UNAVAILABLE", YELLOW)
+    print(f"  {_c('Neptune:', DIM)} {neptune_str}")
+    if ge.error:
+        print(f"  {_c('Error:', RED)} {ge.error}")
+        print()
+        return
+
+    # Entity extraction
+    if ge.entities_extracted:
+        ent_strs = []
+        for e in ge.entities_extracted[:8]:
+            text = e.get("text", "?")
+            etype = e.get("type", "")
+            conf = e.get("confidence", 0.0)
+            ent_strs.append(f"{text}({etype},{conf:.1f})")
+        print(f"  {_c('Entities:', DIM)} {', '.join(ent_strs)}")
+
+    # Expansion config
+    print(f"  {_c('Expansion hops:', DIM)} {ge.expansion_hops}")
+    if ge.relation_allowlist:
+        print(f"  {_c('Relation allowlist:', DIM)} {', '.join(ge.relation_allowlist[:6])}")
+
+    # Graph search results
+    print(f"  {_c('Nodes matched:', DIM)} {ge.graph_nodes_matched}")
+    if ge.graph_paths:
+        print(f"  {_c('Graph paths:', DIM)} ({len(ge.graph_paths)} total)")
+        for path in ge.graph_paths[:5]:
+            print(f"    {_c(path, DIM)}")
+        if len(ge.graph_paths) > 5:
+            print(f"    {_c(f'… +{len(ge.graph_paths) - 5} more', DIM)}")
+
+    # Candidate resolution
+    print(f"  {_c('Candidates (raw):', DIM)} {ge.graph_candidates_count}")
+    print(f"  {_c('Candidates (resolved):', DIM)} {ge.graph_candidates_resolved}")
+    print(f"  {_c('New (added):', BGREEN if ge.graph_candidates_new > 0 else DIM)} {ge.graph_candidates_new}")
+    print(f"  {_c('Duplicate (skipped):', DIM)} {ge.graph_candidates_duplicate}")
+
+    # Join methods
+    if ge.join_methods_used:
+        methods_str = ", ".join(f"{k}:{v}" for k, v in ge.join_methods_used.items())
+        print(f"  {_c('Join methods:', DIM)} {methods_str}")
+
+    # Candidate details
+    if ge.candidates:
+        print(f"  {_c('Resolved candidates:', DIM)}")
+        for c in ge.candidates[:8]:
+            cid = c.get("chunk_id", "?")[:25]
+            node_name = c.get("graph_node_name", "?")[:20]
+            node_type = c.get("graph_node_type", "")
+            jm = c.get("join_method", "?")
+            jc = c.get("join_confidence", 0.0)
+            dup = c.get("already_in_initial", False)
+            doc = c.get("document_name", "")[:25]
+            dup_tag = _c(" [DUP]", YELLOW) if dup else ""
+            print(f"    {_c(cid, BWHITE)} {node_name}({node_type}) join={jm}@{jc:.1f} doc={_c(doc, DIM)}{dup_tag}")
+
+    # Rerank survival
+    if ge.graph_candidates_survived_rerank is not None and ge.graph_candidates_new > 0:
+        survived = ge.graph_candidates_survived_rerank
+        total_new = ge.graph_candidates_new
+        if survived > 0:
+            print(f"  {_c('Survived rerank:', BGREEN)} {survived}/{total_new}")
+        else:
+            print(f"  {_c('Survived rerank:', YELLOW)} 0/{total_new} (all filtered by reranker)")
+
+    # Before/after counts
+    if ge.candidates_before_graph or ge.candidates_after_graph:
+        print(f"  {_c('Chunks before graph:', DIM)} {ge.candidates_before_graph} → {_c('after:', DIM)} {ge.candidates_after_graph}")
+    print()
+
+
 def _run_retrieve(query: str, s: _Session) -> None:
-    from ..retrieval.query_router import retrieve
+    from ..retrieval.hybrid_retriever import hybrid_retrieve
 
     t0 = time.time()
-    with _Spinner("Retrieving chunks…"):
-        resp = retrieve(query=query, top_k=s.top_k, include_graph=False, project_id=s.project_id)
+    with _Spinner("Retrieving chunks (hybrid)…"):
+        result = hybrid_retrieve(
+            query=query, top_k=s.top_k, project_id=s.project_id,
+        )
     elapsed = time.time() - t0
     _step("Retrieving chunks", elapsed)
     s.total_latency += elapsed
-    _print_chunks(resp.chunks, verbose=s.verbose)
+    _print_chunks(result.chunks, verbose=s.verbose)
+
+    if s.debug_retrieval or s.show_vector_trace or s.show_graph_trace:
+        _print_hybrid_trace(result)
 
 
 def _run_answer(query: str, s: _Session) -> None:
     from ..retrieval.answer_generator import generate_answer, load_evidence_images
-    from ..retrieval.graph_retriever import fetch_dual_graph_context
-    from ..retrieval.vector_retriever import retrieve_chunks
+    from ..retrieval.graph_guided_retrieval import retrieve_with_graph_guidance
+    from ..retrieval.trace import RetrievalTrace
     from ..config import config
+
+    trace = None
+    debug_active = s.debug_retrieval or s.show_vector_trace or s.show_graph_trace or s.show_context
+    if debug_active:
+        trace = RetrievalTrace(enabled=True)
 
     t0 = time.time()
 
-    # Step 1: Markdown chunk retrieval
-    with _Spinner("① Retrieving Markdown chunks…"):
-        chunks = retrieve_chunks(query=query, top_k=s.top_k, project_id=s.project_id)
+    # Step 1: Graph-guided retrieval (graph exploration → guided vector search → merge)
+    if s.vector_only:
+        from ..retrieval.hybrid_retriever import hybrid_retrieve
+        with _Spinner("① Hybrid retrieval (vector + keyword, graph skipped)…"):
+            hybrid_result = hybrid_retrieve(
+                query=query, top_k=s.top_k, project_id=s.project_id,
+            )
+        chunks = hybrid_result.chunks
+        if trace is not None and hybrid_result.trace:
+            trace.hybrid = hybrid_result.trace
+        elif trace is not None and hybrid_result.rewritten:
+            trace.hybrid.normalized_query = hybrid_result.rewritten.normalized
+            trace.hybrid.intent_label = hybrid_result.rewritten.intent.label
+            trace.hybrid.intent_confidence = hybrid_result.rewritten.intent.confidence
+            trace.hybrid.keyword_query = hybrid_result.rewritten.keyword_query
+            trace.hybrid.keyword_hits_count = len(hybrid_result.keyword_hits)
+            trace.hybrid.dedup_removed = hybrid_result.dedup_removed
+        dual_graph = None
+        guidance_status = "none"
+    else:
+        with _Spinner("①② Graph-guided retrieval (graph exploration + vector search)…"):
+            chunks, dual_graph, guidance_status = retrieve_with_graph_guidance(
+                query=query, top_k=s.top_k, project_id=s.project_id,
+                trace=trace,
+                disable_keyword_boost=s.disable_keyword_boost,
+            )
     t1 = time.time()
-    _step("① Markdown chunk retrieval", t1 - t0)
+
+    # Show guidance status
+    _guidance_labels = {
+        "strong": _c("ACTIVE", BGREEN) + _c(" (focused sheet filter applied)", DIM),
+        "weak": _c("WEAK", BYELLOW) + _c(" (over-broad hints, context only — no vector filter)", DIM),
+        "none": _c("NONE", DIM) + _c(" (no graph match, pure vector retrieval)", DIM),
+        "error": _c("ERROR", RED) + _c(" (Neptune failed, fell back to vector)", DIM),
+    }
+    status_label = _guidance_labels.get(guidance_status, guidance_status)
+    if s.vector_only:
+        _step("① Vector-only retrieval (graph skipped)", t1 - t0)
+    else:
+        _step(f"①② Graph-guided retrieval — {status_label}", t1 - t0)
+
+    # Print debug traces if active
+    if trace and (s.debug_retrieval or s.show_vector_trace):
+        _print_vector_trace(trace.vector)
+        _print_hybrid_trace_from_retrieval_trace(trace)
+    if trace and s.debug_retrieval and trace.rerank.enabled:
+        _print_rerank_trace(trace.rerank)
+    if trace and (s.debug_retrieval or s.show_graph_trace):
+        _print_graph_trace(trace.graph)
+        _print_graph_expansion_trace(trace)
+
     _print_chunks(chunks, verbose=s.verbose)
 
-    # Step 2: Dual-layer graph context retrieval
-    dual_graph = None
-    with _Spinner("②③ Retrieving graph context (business + implementation)…"):
-        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=s.project_id) if chunks else None
-    t2 = time.time()
-    _step("②③ Graph context retrieval", t2 - t1)
+    # Show graph context
+    show_raw = s.debug_retrieval or s.show_graph_trace or s.verbose
     if dual_graph and not dual_graph.is_empty:
-        _print_dual_graph(dual_graph)
+        _print_dual_graph(dual_graph, graph_format=s.graph_format, show_raw_ids=show_raw)
+        s.last_dual_graph = dual_graph
+    elif dual_graph is not None:
+        _print_dual_graph(dual_graph, neptune_available=True, graph_format=s.graph_format, show_raw_ids=show_raw)
     else:
-        _print_graph(None)
+        neptune_ok = guidance_status != "error"
+        _print_dual_graph(None, neptune_available=neptune_ok)
 
-    # Step 3: PDF/PNG evidence resolution from chunk metadata
+    # Print context summary if requested
+    if trace and (s.debug_retrieval or s.show_context):
+        _print_context_summary(chunks, dual_graph, trace)
+
+    # Isolation check
+    if trace and trace.isolation.project_id:
+        if s.strict_isolation and trace.isolation.violations_count > 0:
+            _print_isolation_status(trace.isolation, strict=True)
+            print(_c("  ERROR: Strict isolation violated — aborting answer generation.", RED))
+            s.last_trace = trace
+            return
+        elif s.debug_retrieval and (trace.isolation.violations_count > 0
+                                    or trace.isolation.graph_nodes_without_project_id):
+            _print_isolation_status(trace.isolation, strict=False)
+
+    # Apply graph confidence threshold — filter low-confidence edges before answer
+    if dual_graph and s.graph_confidence_threshold > 0.0:
+        dual_graph = _filter_graph_by_confidence(dual_graph, s.graph_confidence_threshold)
+
+    # Step 2: PDF/PNG evidence resolution from chunk metadata
     evidence_images: list = []
     if s.evidence and chunks:
-        with _Spinner("④ Loading PDF/PNG evidence images…"):
+        with _Spinner("③ Loading PDF/PNG evidence images…"):
             evidence_images = load_evidence_images(chunks, config.project_root)
-        t3 = time.time()
-        _step(f"④ Evidence image resolution ({len(evidence_images)} pages)", t3 - t2)
+        t2 = time.time()
+        _step(f"③ Evidence image resolution ({len(evidence_images)} pages)", t2 - t1)
+        if trace:
+            trace.timing.evidence_images_ms = (t2 - t1) * 1000
     else:
-        t3 = t2
+        t2 = t1
 
     # Print evidence flow summary
-    _print_evidence_flow(chunks, dual_graph, evidence_images, t3 - t0, project_id=s.project_id)
+    _print_evidence_flow(chunks, dual_graph, evidence_images, t2 - t0, project_id=s.project_id)
 
-    # Step 4: Multimodal VLM answer generation with full evidence pack
-    with _Spinner("Generating grounded answer (VLM)…"):
+    # Step 3: Multimodal VLM answer generation with full evidence pack
+    with _Spinner("④ Generating grounded answer (VLM)…"):
         ans = generate_answer(
             query=query,
             retrieved_chunks=chunks,
@@ -388,28 +824,68 @@ def _run_answer(query: str, s: _Session) -> None:
             business_graph=dual_graph.business if dual_graph else None,
             implementation_graph=dual_graph.implementation if dual_graph else None,
         )
-    t4 = time.time()
-    _step("VLM answer generation", t4 - t3)
+    t3 = time.time()
+    _step("④ VLM answer generation", t3 - t2)
+
+    if trace:
+        trace.timing.answer_generation_ms = (t3 - t2) * 1000
+        trace.timing.total_ms = (t3 - t0) * 1000
 
     s.total_in_tok += ans.input_tokens
     s.total_out_tok += ans.output_tokens
-    s.total_latency += t4 - t0
-    _print_answer(ans, elapsed=t4 - t0)
+    s.total_latency += t3 - t0
+    _print_answer(ans, elapsed=t3 - t0)
+
+    # Print timing trace at end if debug active
+    if trace and s.debug_retrieval:
+        _print_timing_trace(trace.timing)
+
+    if trace:
+        s.last_trace = trace
 
 
 def _run_graph(query: str, s: _Session) -> None:
     from ..retrieval.graph_retriever import fetch_dual_graph_context
     from ..retrieval.vector_retriever import retrieve_chunks
+    from ..retrieval.trace import RetrievalTrace
+
+    trace = None
+    debug_active = s.debug_retrieval or s.show_vector_trace or s.show_graph_trace
+    if debug_active:
+        trace = RetrievalTrace(enabled=True)
 
     t0 = time.time()
     with _Spinner("Retrieving chunks + dual graph…"):
-        chunks = retrieve_chunks(query=query, top_k=s.top_k, project_id=s.project_id)
-        dual_graph = fetch_dual_graph_context(chunks, query=query, project_id=s.project_id) if chunks else None
+        chunks = retrieve_chunks(
+            query=query, top_k=s.top_k, project_id=s.project_id,
+            trace=trace.vector if trace else None,
+        )
+        dual_graph = fetch_dual_graph_context(
+            chunks, query=query, project_id=s.project_id,
+            trace=trace.graph if trace else None,
+            isolation_trace=trace.isolation if trace else None,
+        ) if chunks else None
     elapsed = time.time() - t0
     _step("Retrieving chunks + dual graph", elapsed)
     s.total_latency += elapsed
+
+    if trace and (s.debug_retrieval or s.show_vector_trace):
+        _print_vector_trace(trace.vector)
+    if trace and (s.debug_retrieval or s.show_graph_trace):
+        _print_graph_trace(trace.graph)
+
     _print_chunks(chunks, verbose=s.verbose)
-    _print_dual_graph(dual_graph)
+    show_raw = s.debug_retrieval or s.show_graph_trace or s.verbose
+    _print_dual_graph(dual_graph, graph_format=s.graph_format, show_raw_ids=show_raw)
+    if dual_graph:
+        s.last_dual_graph = dual_graph
+
+    if trace and trace.isolation.project_id and s.debug_retrieval:
+        _print_isolation_status(trace.isolation, strict=s.strict_isolation)
+
+    if trace:
+        trace.timing.total_ms = elapsed * 1000
+        s.last_trace = trace
 
 
 def _handle_query(query: str, s: _Session) -> bool:
@@ -433,6 +909,107 @@ def _handle_query(query: str, s: _Session) -> bool:
             traceback.print_exc()
     s.query_count += 1
     return True
+
+
+def _cmd_save_graph(s: _Session, args: list[str]) -> None:
+    """Export the last retrieved graph as Mermaid .mmd file."""
+    from .graph_display import export_graph_mermaid
+
+    if s.last_dual_graph is None or s.last_dual_graph.is_empty:
+        print(_c("  No graph available. Run a query first.", YELLOW))
+        return
+
+    # Determine output path
+    if args:
+        out_path = Path(args[0]).expanduser()
+    else:
+        out_dir = Path.home() / ".hermes_qa_exports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = out_dir / f"graph_{ts}.mmd"
+
+    # Merge both layers for export
+    merged = s.last_dual_graph.to_merged_context()
+    mermaid_text = export_graph_mermaid(merged.nodes, merged.edges)
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(mermaid_text, encoding="utf-8")
+        print(_c(f"  Graph exported → {out_path}", BGREEN))
+        print(_c(f"  ({len(merged.nodes)} nodes, {len(merged.edges)} edges)", DIM))
+    except Exception as exc:
+        print(_c(f"  Export failed: {exc}", RED))
+
+
+def _cmd_save_trace(s: _Session, args: list[str]) -> None:
+    """Save last retrieval trace as JSON."""
+    import json
+    import hashlib
+    from dataclasses import asdict
+
+    if s.last_trace is None:
+        print(_c("  No trace available. Run a query first.", YELLOW))
+        return
+
+    # Determine output path
+    if args:
+        out_path = Path(args[0]).expanduser()
+    else:
+        out_dir = Path.home() / ".hermes_qa_traces"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        q_hash = hashlib.md5((s.last_query or "").encode()).hexdigest()[:8]
+        out_path = out_dir / f"qa_trace_{ts}_{q_hash}.json"
+
+    # Serialize trace safely
+    try:
+        trace_dict = asdict(s.last_trace)
+    except Exception:
+        # Fallback: manual serialization of known fields
+        trace_dict = {"error": "Could not fully serialize trace"}
+
+    # Add metadata
+    trace_dict["_meta"] = {
+        "query": s.last_query or "",
+        "project_id": s.project_id,
+        "mode": s.mode,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(trace_dict, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        print(_c(f"  Trace saved → {out_path}", BGREEN))
+    except Exception as exc:
+        print(_c(f"  Save failed: {exc}", RED))
+
+
+def _cmd_ask_file(filepath: str, s: _Session) -> None:
+    """Read query from file and execute it."""
+    MAX_FILE_SIZE = 64 * 1024  # 64 KB
+
+    try:
+        p = Path(filepath).expanduser()
+        if not p.exists():
+            print(_c(f"  File not found: {filepath}", RED))
+            return
+        if not p.is_file():
+            print(_c(f"  Not a file: {filepath}", RED))
+            return
+        size = p.stat().st_size
+        if size == 0:
+            print(_c("  File is empty.", YELLOW))
+            return
+        if size > MAX_FILE_SIZE:
+            print(_c(f"  File too large ({size:,} bytes, max {MAX_FILE_SIZE:,}). Truncating.", YELLOW))
+        content = p.read_text(encoding="utf-8")[:MAX_FILE_SIZE].strip()
+        if not content:
+            print(_c("  File content is empty after stripping.", YELLOW))
+            return
+        print(_c(f"  Reading query from: {filepath} ({len(content)} chars)", DIM))
+        _handle_query(content, s)
+    except Exception as exc:
+        print(_c(f"  Error reading file: {exc}", RED))
 
 
 def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bool:
@@ -467,6 +1044,30 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
     elif name == "evidence":
         s.evidence = not s.evidence
         print(_c(f"  Evidence images → {'ON' if s.evidence else 'OFF'}", BGREEN))
+    elif name == "trace":
+        s.debug_retrieval = not s.debug_retrieval
+        print(_c(f"  Debug retrieval trace → {'ON' if s.debug_retrieval else 'OFF'}", BGREEN))
+    elif name == "rerank":
+        if args and args[0].lower() == "on":
+            s.rerank_override = True
+        elif args and args[0].lower() == "off":
+            s.rerank_override = False
+        else:
+            if s.rerank_override is None:
+                s.rerank_override = True
+            else:
+                s.rerank_override = not s.rerank_override
+        state = "ON" if s.rerank_override else "OFF"
+        os.environ["RERANK_ENABLED"] = "true" if s.rerank_override else "false"
+        print(_c("  Rerank → {}".format(state), BGREEN))
+    elif name in ("vector-only", "vectoronly"):
+        s.vector_only = not s.vector_only
+        print(_c(f"  Vector-only mode → {'ON' if s.vector_only else 'OFF'}", BGREEN))
+    elif name == "isolation":
+        if s.last_trace and s.last_trace.isolation.project_id:
+            _print_isolation_status(s.last_trace.isolation, strict=s.strict_isolation)
+        else:
+            print(_c("  No isolation data yet — run a query first.", DIM))
     elif name == "history":
         if not s.history:
             print(_c("  No queries yet.", DIM))
@@ -487,6 +1088,24 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
             _cmd_sheet(int(args[0]), s)
         else:
             print(_c("  Usage: /sheet N", YELLOW))
+    elif name in ("graph-format", "graphformat"):
+        from .graph_display import GRAPH_FORMATS
+        if args and args[0].lower() in GRAPH_FORMATS:
+            s.graph_format = args[0].lower()
+            print(_c(f"  Graph format → {s.graph_format}", BGREEN))
+        else:
+            print(_c(f"  Usage: /graph-format [{' | '.join(GRAPH_FORMATS)}]", YELLOW))
+            print(_c(f"  Current: {s.graph_format}", DIM))
+    elif name in ("save-graph", "export-graph-mermaid"):
+        _cmd_save_graph(s, args)
+    elif name in ("save-trace", "savetrace"):
+        _cmd_save_trace(s, args)
+    elif name in ("ask-file", "askfile"):
+        # File input: /ask-file /path/to/file.txt
+        if not args:
+            print(_c("  Usage: /ask-file <path>", YELLOW))
+        else:
+            _cmd_ask_file(args[0], s)
     else:
         print(_c(f"  Unknown command: /{name}  (try /help)", YELLOW))
     return True
@@ -495,6 +1114,10 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
 _TAB_COMMANDS = [
     "/mode retrieve", "/mode answer", "/mode graph",
     "/topk ", "/verbose", "/evidence",
+    "/trace", "/rerank", "/rerank on", "/rerank off",
+    "/vector-only", "/isolation",
+    "/graph-format compact", "/graph-format table", "/graph-format network", "/graph-format raw",
+    "/save-graph ", "/save-trace ", "/ask-file ",
     "/history", "/last", "/stats",
     "/sheets", "/sheet ", "/help", "/clear", "/quit", "/exit",
 ]
@@ -522,11 +1145,25 @@ def _setup_readline() -> None:
         pass
 
 
-def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "") -> None:
+def run_terminal(
+    catalog_dir: Optional[Path] = None,
+    project_id: str = "",
+    collection: Optional[str] = None,
+    debug_retrieval: bool = False,
+    show_vector_trace: bool = False,
+    show_graph_trace: bool = False,
+    show_context: bool = False,
+    strict_project_isolation: bool = False,
+    graph_confidence_threshold: float = 0.0,
+    disable_keyword_boost: bool = False,
+    vector_only: bool = False,
+) -> None:
     """Launch the interactive QA terminal."""
     from ..config import config
 
     model_id = config.vlm_model_id
+    if collection:
+        config.vector_collection = collection
     collection = config.vector_collection
 
     _setup_readline()
@@ -534,6 +1171,14 @@ def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "") -> No
     session.catalog_dir = catalog_dir
     session.catalog = _load_catalog(catalog_dir)
     session.project_id = project_id
+    session.debug_retrieval = debug_retrieval
+    session.show_vector_trace = show_vector_trace
+    session.show_graph_trace = show_graph_trace
+    session.show_context = show_context
+    session.strict_isolation = strict_project_isolation
+    session.graph_confidence_threshold = graph_confidence_threshold
+    session.disable_keyword_boost = disable_keyword_boost
+    session.vector_only = vector_only
 
     os.system("clear")
     _print_header(session, collection, model_id)
@@ -560,6 +1205,27 @@ def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "") -> No
         if not raw:
             continue
 
+        # Triple-quote multiline input support
+        if raw.startswith('"""'):
+            lines = [raw[3:]]  # content after opening """
+            while True:
+                try:
+                    line = input("... ")
+                except (EOFError, KeyboardInterrupt):
+                    print(_c("\n  (Multiline input cancelled)", YELLOW))
+                    lines = []
+                    break
+                if line.rstrip().endswith('"""'):
+                    lines.append(line.rstrip()[:-3])
+                    break
+                lines.append(line)
+            if not lines:
+                continue
+            raw = "\n".join(lines).strip()
+            if not raw:
+                continue
+            print(_c(f"  (Multiline query: {len(raw)} chars)", DIM))
+
         if raw.startswith("/"):
             if not _handle_command(raw, session, model_id, collection):
                 break
@@ -570,3 +1236,6 @@ def run_terminal(catalog_dir: Optional[Path] = None, project_id: str = "") -> No
             print(_c(f"  Project → {new_pid or '(all)'}", BGREEN))
         else:
             _handle_query(raw, session)
+
+
+run_qa_terminal = run_terminal

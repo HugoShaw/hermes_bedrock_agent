@@ -117,3 +117,32 @@ def download_excel_files(
         updated.append(sf.model_copy(update={"local_path": local_path}))
 
     return manifest.model_copy(update={"excel_files": updated})
+
+
+def download_mermaid_files(
+    manifest: WorkManifest,
+    local_base: str,
+    cfg: Optional[Config] = None,
+) -> WorkManifest:
+    """Download all MERMAID and MARKDOWN ground-truth files to local_base/mermaid/."""
+    cfg = cfg or _default_config
+    bucket, _ = parse_s3_uri(manifest.s3_prefix)
+
+    mermaid_dir = os.path.join(local_base, "mermaid")
+    os.makedirs(mermaid_dir, exist_ok=True)
+
+    updated: dict[str, S3File] = {}
+    for stem, sf in manifest.ground_truth_files.items():
+        if sf.file_type not in (FileType.MERMAID, FileType.MARKDOWN):
+            updated[stem] = sf
+            continue
+        filename = PurePosixPath(sf.key).name
+        local_path = os.path.join(mermaid_dir, filename)
+        if not os.path.exists(local_path):
+            logger.info("  Downloading ground-truth %s → %s", sf.key, local_path)
+            download_file(bucket, sf.key, local_path, region=cfg.aws_region)
+        else:
+            logger.info("  Already local: %s", local_path)
+        updated[stem] = sf.model_copy(update={"local_path": local_path})
+
+    return manifest.model_copy(update={"ground_truth_files": updated})

@@ -52,11 +52,14 @@ class SheetPDF(BaseModel):
 class SheetImages(BaseModel):
     sheet_info: SheetInfo
     full_image_path: str
+    page_image_paths: list[str] = Field(default_factory=list)
     tile_paths: list[str] = Field(default_factory=list)
     vlm_ready_path: str = ""
     width_px: int = 0
     height_px: int = 0
     dpi_used: int = 150
+    page_count: int = 1
+    rendering_strategy: str = "single_page"
 
 
 class ParseResult(BaseModel):

@@ -227,6 +227,44 @@ def _serialize_graph_context(graph_context: Optional[GraphContext]) -> str:
                                   "Entity relationships, system connections, and data flows.")
 
 
+def _derive_pdf_from_markdown_path(md_path: str) -> Optional[Path]:
+    """Derive PDF evidence path from parsed_markdown_path.
+
+    Experiment chunks store paths like:
+      .../outputs/14_債務奉行クラウド/run_.../Workbook/vlm_parsed/sheet_02.md
+    The corresponding PDF is at:
+      .../outputs/14_債務奉行クラウド/run_.../Workbook/pdf/sheet_02.pdf
+    """
+    if not md_path:
+        return None
+    p = Path(md_path)
+    # Expected: .../vlm_parsed/sheet_XX.md → .../pdf/sheet_XX.pdf
+    if p.parent.name == "vlm_parsed":
+        pdf_path = p.parent.parent / "pdf" / p.with_suffix(".pdf").name
+        return pdf_path
+    # Also handle csv_parsed → pdf
+    if p.parent.name == "csv_parsed":
+        pdf_path = p.parent.parent / "pdf" / p.with_suffix(".pdf").name
+        return pdf_path
+    return None
+
+
+def _derive_run_dir(md_path: str) -> Optional[Path]:
+    """Derive the run directory from a parsed markdown file path.
+
+    Paths like:
+      .../outputs/project_id/run_YYYYMMDD_HHMMSS/parsed/excel/workbook/sheet.md
+    The run directory is the ancestor containing 'run_' in its name.
+    """
+    if not md_path:
+        return None
+    p = Path(md_path)
+    for parent in p.parents:
+        if parent.name.startswith("run_"):
+            return parent
+    return None
+
+
 def load_evidence_images(
     chunks: list[RetrievedChunk],
     project_root: Path,
@@ -236,7 +274,8 @@ def load_evidence_images(
 
     Resolution order for each chunk:
       1. Try source_pdf_s3_path → local PDF → render page 1 to PNG
-      2. Try corresponding PNG in images/ directory (pre-rendered)
+      2. Try parsed_markdown_path → derive sibling pdf/ path → render to PNG
+      3. Try corresponding PNG in images/ directory (pre-rendered)
 
     Returns list of (label, png_bytes, local_path_str).
     """
@@ -246,14 +285,61 @@ def load_evidence_images(
     for chunk in chunks:
         if len(results) >= max_images:
             break
-        s3_path = chunk.source_pdf_s3_path
-        if not s3_path or s3_path in seen_paths:
-            continue
-        seen_paths.add(s3_path)
 
-        local_path = _s3_path_to_local(s3_path, project_root)
+        local_path: Optional[Path] = None
+        dedup_key: str = ""
+
+        # Strategy A: Use source_pdf_s3_path (production path)
+        s3_path = chunk.source_pdf_s3_path
+        if s3_path:
+            dedup_key = s3_path
+            if dedup_key in seen_paths:
+                continue
+            local_path = _s3_path_to_local(s3_path, project_root)
+
+        # Strategy B: Derive PDF from parsed_markdown_path (experiment path)
+        if local_path is None or (local_path and not local_path.exists()):
+            derived = _derive_pdf_from_markdown_path(chunk.parsed_markdown_path)
+            if derived is not None:
+                dedup_key = str(derived)
+                if dedup_key in seen_paths:
+                    continue
+                local_path = derived
+
+        # Strategy C: Use evidence_path relative to run directory (live data path)
+        # evidence_path is like "evidence/excel/WorkbookName/sheet_XX/"
+        # source_markdown_file gives us the run directory
+        if local_path is None or (local_path and not local_path.exists()):
+            ev_path = chunk.evidence_path
+            md_file = chunk.parsed_markdown_path or chunk.source_markdown_file
+            if ev_path and md_file:
+                # Derive run directory from markdown path
+                # e.g. .../outputs/project/run_YYYYMMDD_HHMMSS/parsed/excel/...
+                run_dir = _derive_run_dir(md_file)
+                if run_dir:
+                    ev_dir = run_dir / ev_path
+                    if ev_dir.is_dir():
+                        # Look for PDF in evidence directory
+                        pdf_candidates = sorted(ev_dir.glob("*.pdf"))
+                        if pdf_candidates:
+                            local_path = pdf_candidates[0]
+                            dedup_key = str(local_path)
+                            if dedup_key in seen_paths:
+                                continue
+                        else:
+                            # Look for PNG (full.png or any png)
+                            full_png = ev_dir / "full.png"
+                            if full_png.exists():
+                                local_path = full_png
+                                dedup_key = str(full_png)
+                                if dedup_key in seen_paths:
+                                    continue
+
+        if not dedup_key or dedup_key in seen_paths:
+            continue
         if local_path is None:
             continue
+        seen_paths.add(dedup_key)
 
         png_bytes: Optional[bytes] = None
         resolved_path = str(local_path)
@@ -278,7 +364,7 @@ def load_evidence_images(
                         break
 
         if png_bytes is None:
-            logger.debug("No visual evidence found for: %s", s3_path)
+            logger.debug("No visual evidence found for: %s (local_path=%s)", dedup_key, local_path)
             continue
 
         label = f"Sheet {chunk.sheet_index} ({chunk.sheet_name}) — {Path(resolved_path).name}"

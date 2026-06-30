@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><title>テスト設計書</title></head>
+<body>
+<h1>システム連携設計</h1>
+<h2>1. 概要</h2>
+<p>本文書はSAP連携の基本設計を記述する。DataSpiderを経由してCSVファイルをANDPADへ連携する。</p>
+<h2>2. 処理フロー</h2>
+<ol>
+<li>SAP S/4HANAから発注データを抽出</li>
+<li>中間CSVファイルへ変換</li>
+<li>DataSpiderがCSVを取得</li>
+<li>ANDPAD APIへPOST送信</li>
+</ol>
+<h2>3. エラー処理</h2>
+<p>通信エラー時はリトライを3回実施する。3回失敗した場合はエラーログに記録して次のレコードへ進む。</p>
+</body>
+</html>

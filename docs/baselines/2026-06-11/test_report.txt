@@ -1,0 +1,737 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.0.3, pluggy-1.6.0 -- /home/ubuntu/projects/hermes_bedrock_agent/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /home/ubuntu/projects/hermes_bedrock_agent
+configfile: pyproject.toml
+plugins: mock-3.15.1, timeout-2.4.0, anyio-4.13.0
+collecting ... collected 73 items
+
+tests/test_safety_guards.py::TestBuildKbProjectIdRequired::test_build_kb_requires_project_id PASSED [  1%]
+tests/test_safety_guards.py::TestBuildKbProjectIdRequired::test_build_kb_allow_global_permits_no_project_id PASSED [  2%]
+tests/test_safety_guards.py::TestBuildKbAppendReplace::test_build_kb_append_and_replace_mutually_exclusive PASSED [  4%]
+tests/test_safety_guards.py::TestBuildKbAppendReplace::test_build_kb_append_emits_deprecation_warning PASSED [  5%]
+tests/test_safety_guards.py::TestLoadVectorStoreGuard::test_load_vector_store_rejects_empty_replace PASSED [  6%]
+tests/test_safety_guards.py::TestGraphProjectIdRequired::test_graph_requires_project_id PASSED [  8%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_artifact_dir_created FAILED [  9%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_save_and_load_jsonl FAILED [ 10%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_append_jsonl FAILED [ 12%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_save_json FAILED [ 13%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_save_text FAILED [ 15%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_record_failure FAILED [ 16%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_get_existing_ids FAILED [ 17%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_load_jsonl_missing_file FAILED [ 19%]
+tests/test_e2e_murata_pipeline.py::TestPipelineState::test_pydantic_model_save FAILED [ 20%]
+tests/test_e2e_murata_pipeline.py::TestStageScan::test_scan_filters_system_files FAILED [ 21%]
+tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_infer_source_type FAILED [ 23%]
+tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_split_markdown_sections FAILED [ 24%]
+tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_split_sql_sections FAILED [ 26%]
+tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_split_code_sections_java FAILED [ 27%]
+tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_parse_text_unicode FAILED [ 28%]
+tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_parse_text_shift_jis_fallback FAILED [ 30%]
+tests/test_e2e_murata_pipeline.py::TestStageChunk::test_chunk_from_normalized_docs FAILED [ 31%]
+tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_default_args FAILED [ 32%]
+tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_stage_scan FAILED [ 34%]
+tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_live_neptune_flags FAILED [ 35%]
+tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_no_vlm_flag FAILED [ 36%]
+tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_mode_and_s3_uri FAILED [ 38%]
+tests/test_e2e_murata_pipeline.py::TestFinalReports::test_generate_final_reports FAILED [ 39%]
+tests/test_e2e_murata_pipeline.py::TestFinalReports::test_generate_reports_with_failures FAILED [ 41%]
+tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_exclude_pattern_matches_filename FAILED [ 42%]
+tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_skip_embedding_pattern_only_affects_embedding FAILED [ 43%]
+tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_skip_graph_extraction_pattern_only_affects_graph FAILED [ 45%]
+tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_no_patterns_returns_all FAILED [ 46%]
+tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_wildcard_matches_multiple_files FAILED [ 47%]
+tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_combined_exclude_and_stage_patterns FAILED [ 49%]
+tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_matches_source_uri FAILED [ 50%]
+tests/test_e2e_scripts.py::TestExportMermaid::test_filter_by_center_bfs FAILED [ 52%]
+tests/test_e2e_scripts.py::TestExportMermaid::test_filter_no_match_returns_limited FAILED [ 53%]
+tests/test_e2e_scripts.py::TestExportMermaid::test_build_from_artifacts FAILED [ 54%]
+tests/test_e2e_scripts.py::TestExportMermaid::test_load_jsonl FAILED     [ 56%]
+tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_disabled FAILED [ 57%]
+tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_mode_none FAILED [ 58%]
+tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_no_neptune_update FAILED [ 60%]
+tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_require_confirm FAILED [ 61%]
+tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_max_entities FAILED [ 63%]
+tests/test_enrichment_optional.py::TestEnrichmentSettings::test_app_settings_enrichment_property FAILED [ 64%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_none_returns_none FAILED [ 65%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_returns_results FAILED [ 67%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_priority_entity_has_i18n FAILED [ 68%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_writes_artifacts FAILED [ 69%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_relation_builtin_labels FAILED [ 71%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_mock_returns_results FAILED [ 72%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_llm_warns_from_pipeline FAILED [ 73%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_max_entities_respected FAILED [ 75%]
+tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_none_no_llm_call FAILED [ 76%]
+tests/test_enrichment_optional.py::TestEnrichI18nCLI::test_mode_none_prints_info_and_exits FAILED [ 78%]
+tests/test_enrichment_optional.py::TestEnrichI18nCLI::test_update_neptune_without_confirm_fails FAILED [ 79%]
+tests/test_enrichment_optional.py::TestEnrichI18nCLI::test_default_mode_inferred_as_mock PASSED [ 80%]
+tests/test_enrichment_optional.py::TestPipelineEnrichmentStage::test_stage_order_includes_enrichment FAILED [ 82%]
+tests/test_enrichment_optional.py::TestPipelineEnrichmentStage::test_enrichment_mode_default_is_none FAILED [ 83%]
+tests/test_enrichment_optional.py::TestSafety::test_enrichment_settings_no_neptune_by_default FAILED [ 84%]
+tests/test_enrichment_optional.py::TestSafety::test_run_enrichment_mode_none_no_side_effects FAILED [ 86%]
+tests/test_enrichment_optional.py::TestSafety::test_mode_rule_no_llm_import FAILED [ 87%]
+tests/test_enrichment_optional.py::TestQueryEntityExtractorWithoutI18n::test_entity_index_works_without_i18n_fields FAILED [ 89%]
+tests/test_enrichment_optional.py::TestQueryEntityExtractorWithoutI18n::test_entity_index_works_with_i18n_fields FAILED [ 90%]
+tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_fallback_no_i18n FAILED [ 91%]
+tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_technical_mode FAILED [ 93%]
+tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_business_mode_with_i18n FAILED [ 94%]
+tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_mixed_mode FAILED [ 95%]
+tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_business_missing_lang_fallback FAILED [ 97%]
+tests/test_enrichment_optional.py::TestVisualizationFallback::test_sanitize_id_always_ascii FAILED [ 98%]
+tests/test_enrichment_optional.py::TestVisualizationFallback::test_sanitize_id_deterministic FAILED [100%]
+
+=================================== FAILURES ===================================
+_________________ TestPipelineState.test_artifact_dir_created __________________
+tests/test_e2e_murata_pipeline.py:40: in test_artifact_dir_created
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+__________________ TestPipelineState.test_save_and_load_jsonl __________________
+tests/test_e2e_murata_pipeline.py:45: in test_save_and_load_jsonl
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_____________________ TestPipelineState.test_append_jsonl ______________________
+tests/test_e2e_murata_pipeline.py:57: in test_append_jsonl
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_______________________ TestPipelineState.test_save_json _______________________
+tests/test_e2e_murata_pipeline.py:64: in test_save_json
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_______________________ TestPipelineState.test_save_text _______________________
+tests/test_e2e_murata_pipeline.py:72: in test_save_text
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+____________________ TestPipelineState.test_record_failure _____________________
+tests/test_e2e_murata_pipeline.py:78: in test_record_failure
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+___________________ TestPipelineState.test_get_existing_ids ____________________
+tests/test_e2e_murata_pipeline.py:85: in test_get_existing_ids
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+________________ TestPipelineState.test_load_jsonl_missing_file ________________
+tests/test_e2e_murata_pipeline.py:95: in test_load_jsonl_missing_file
+    state = self._get_state()
+            ^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:36: in _get_state
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+__________________ TestPipelineState.test_pydantic_model_save __________________
+tests/test_e2e_murata_pipeline.py:101: in test_pydantic_model_save
+    from hermes_bedrock_agent.schemas.visualization import VisualizationNode
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.schemas'
+_________________ TestStageScan.test_scan_filters_system_files _________________
+tests/test_e2e_murata_pipeline.py:137: in test_scan_filters_system_files
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:133: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+___________________ TestParseHelpers.test_infer_source_type ____________________
+tests/test_e2e_murata_pipeline.py:200: in test_infer_source_type
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:196: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+________________ TestParseHelpers.test_split_markdown_sections _________________
+tests/test_e2e_murata_pipeline.py:212: in test_split_markdown_sections
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:196: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+___________________ TestParseHelpers.test_split_sql_sections ___________________
+tests/test_e2e_murata_pipeline.py:230: in test_split_sql_sections
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:196: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+________________ TestParseHelpers.test_split_code_sections_java ________________
+tests/test_e2e_murata_pipeline.py:245: in test_split_code_sections_java
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:196: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+___________________ TestParseHelpers.test_parse_text_unicode ___________________
+tests/test_e2e_murata_pipeline.py:266: in test_parse_text_unicode
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:196: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_____________ TestParseHelpers.test_parse_text_shift_jis_fallback ______________
+tests/test_e2e_murata_pipeline.py:274: in test_parse_text_shift_jis_fallback
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:196: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+________________ TestStageChunk.test_chunk_from_normalized_docs ________________
+tests/test_e2e_murata_pipeline.py:304: in test_chunk_from_normalized_docs
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:300: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_______________________ TestCLIParsing.test_default_args _______________________
+tests/test_e2e_murata_pipeline.py:359: in test_default_args
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:355: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+________________________ TestCLIParsing.test_stage_scan ________________________
+tests/test_e2e_murata_pipeline.py:375: in test_stage_scan
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:355: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+____________________ TestCLIParsing.test_live_neptune_flags ____________________
+tests/test_e2e_murata_pipeline.py:386: in test_live_neptune_flags
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:355: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_______________________ TestCLIParsing.test_no_vlm_flag ________________________
+tests/test_e2e_murata_pipeline.py:403: in test_no_vlm_flag
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:355: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_____________________ TestCLIParsing.test_mode_and_s3_uri ______________________
+tests/test_e2e_murata_pipeline.py:414: in test_mode_and_s3_uri
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:355: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_________________ TestFinalReports.test_generate_final_reports _________________
+tests/test_e2e_murata_pipeline.py:464: in test_generate_final_reports
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:460: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_____________ TestFinalReports.test_generate_reports_with_failures _____________
+tests/test_e2e_murata_pipeline.py:509: in test_generate_reports_with_failures
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:460: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+__________ TestExcludePatterns.test_exclude_pattern_matches_filename ___________
+tests/test_e2e_murata_pipeline.py:564: in test_exclude_pattern_matches_filename
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:542: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+____ TestExcludePatterns.test_skip_embedding_pattern_only_affects_embedding ____
+tests/test_e2e_murata_pipeline.py:582: in test_skip_embedding_pattern_only_affects_embedding
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:542: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+__ TestExcludePatterns.test_skip_graph_extraction_pattern_only_affects_graph ___
+tests/test_e2e_murata_pipeline.py:604: in test_skip_graph_extraction_pattern_only_affects_graph
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:542: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_______________ TestExcludePatterns.test_no_patterns_returns_all _______________
+tests/test_e2e_murata_pipeline.py:625: in test_no_patterns_returns_all
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:542: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+___________ TestExcludePatterns.test_wildcard_matches_multiple_files ___________
+tests/test_e2e_murata_pipeline.py:640: in test_wildcard_matches_multiple_files
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:542: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_________ TestExcludePatterns.test_combined_exclude_and_stage_patterns _________
+tests/test_e2e_murata_pipeline.py:656: in test_combined_exclude_and_stage_patterns
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:542: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_________________ TestExcludePatterns.test_matches_source_uri __________________
+tests/test_e2e_murata_pipeline.py:672: in test_matches_source_uri
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_murata_pipeline.py:542: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_________________ TestExportMermaid.test_filter_by_center_bfs __________________
+tests/test_e2e_scripts.py:27: in test_filter_by_center_bfs
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_scripts.py:23: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/export_mermaid.py'
+____________ TestExportMermaid.test_filter_no_match_returns_limited ____________
+tests/test_e2e_scripts.py:53: in test_filter_no_match_returns_limited
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_scripts.py:23: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/export_mermaid.py'
+_________________ TestExportMermaid.test_build_from_artifacts __________________
+tests/test_e2e_scripts.py:61: in test_build_from_artifacts
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_scripts.py:23: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/export_mermaid.py'
+______________________ TestExportMermaid.test_load_jsonl _______________________
+tests/test_e2e_scripts.py:98: in test_load_jsonl
+    module = self._get_module()
+             ^^^^^^^^^^^^^^^^^^
+tests/test_e2e_scripts.py:23: in _get_module
+    spec.loader.exec_module(module)
+<frozen importlib._bootstrap_external>:936: in exec_module
+    ???
+<frozen importlib._bootstrap_external>:1073: in get_code
+    ???
+<frozen importlib._bootstrap_external>:1130: in get_data
+    ???
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/export_mermaid.py'
+_________________ TestEnrichmentSettings.test_default_disabled _________________
+tests/test_enrichment_optional.py:31: in test_default_disabled
+    from hermes_bedrock_agent.configs.settings import EnrichmentSettings
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.configs'
+________________ TestEnrichmentSettings.test_default_mode_none _________________
+tests/test_enrichment_optional.py:37: in test_default_mode_none
+    from hermes_bedrock_agent.configs.settings import EnrichmentSettings
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.configs'
+____________ TestEnrichmentSettings.test_default_no_neptune_update _____________
+tests/test_enrichment_optional.py:43: in test_default_no_neptune_update
+    from hermes_bedrock_agent.configs.settings import EnrichmentSettings
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.configs'
+_____________ TestEnrichmentSettings.test_default_require_confirm ______________
+tests/test_enrichment_optional.py:49: in test_default_require_confirm
+    from hermes_bedrock_agent.configs.settings import EnrichmentSettings
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.configs'
+_______________ TestEnrichmentSettings.test_default_max_entities _______________
+tests/test_enrichment_optional.py:55: in test_default_max_entities
+    from hermes_bedrock_agent.configs.settings import EnrichmentSettings
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.configs'
+_________ TestEnrichmentSettings.test_app_settings_enrichment_property _________
+tests/test_enrichment_optional.py:61: in test_app_settings_enrichment_property
+    from hermes_bedrock_agent.configs.settings import AppSettings
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.configs'
+________________ TestRunEnrichment.test_mode_none_returns_none _________________
+tests/test_enrichment_optional.py:127: in test_mode_none_returns_none
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+_______________ TestRunEnrichment.test_mode_rule_returns_results _______________
+tests/test_enrichment_optional.py:137: in test_mode_rule_returns_results
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+__________ TestRunEnrichment.test_mode_rule_priority_entity_has_i18n ___________
+tests/test_enrichment_optional.py:150: in test_mode_rule_priority_entity_has_i18n
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+______________ TestRunEnrichment.test_mode_rule_writes_artifacts _______________
+tests/test_enrichment_optional.py:162: in test_mode_rule_writes_artifacts
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+___________ TestRunEnrichment.test_mode_rule_relation_builtin_labels ___________
+tests/test_enrichment_optional.py:185: in test_mode_rule_relation_builtin_labels
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+_______________ TestRunEnrichment.test_mode_mock_returns_results _______________
+tests/test_enrichment_optional.py:204: in test_mode_mock_returns_results
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+_____________ TestRunEnrichment.test_mode_llm_warns_from_pipeline ______________
+tests/test_enrichment_optional.py:217: in test_mode_llm_warns_from_pipeline
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+___________ TestRunEnrichment.test_mode_rule_max_entities_respected ____________
+tests/test_enrichment_optional.py:229: in test_mode_rule_max_entities_respected
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+_________________ TestRunEnrichment.test_mode_none_no_llm_call _________________
+tests/test_enrichment_optional.py:241: in test_mode_none_no_llm_call
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+____________ TestEnrichI18nCLI.test_mode_none_prints_info_and_exits ____________
+tests/test_enrichment_optional.py:271: in test_mode_none_prints_info_and_exits
+    assert result.returncode == 0
+E   assert 2 == 0
+E    +  where 2 = CompletedProcess(args=['/home/ubuntu/projects/hermes_bedrock_agent/.venv/bin/python3', 'scripts/enrich_i18n.py', '--mode', 'none'], returncode=2, stdout='', stderr="/home/ubuntu/projects/hermes_bedrock_agent/.venv/bin/python3: can't open file '/home/ubuntu/projects/hermes_bedrock_agent/scripts/enrich_i18n.py': [Errno 2] No such file or directory\n").returncode
+_________ TestEnrichI18nCLI.test_update_neptune_without_confirm_fails __________
+tests/test_enrichment_optional.py:288: in test_update_neptune_without_confirm_fails
+    assert result.returncode == 1
+E   assert 2 == 1
+E    +  where 2 = CompletedProcess(args=['/home/ubuntu/projects/hermes_bedrock_agent/.venv/bin/python3', 'scripts/enrich_i18n.py', '--mode', 'mock', '--update-neptune'], returncode=2, stdout='', stderr="/home/ubuntu/projects/hermes_bedrock_agent/.venv/bin/python3: can't open file '/home/ubuntu/projects/hermes_bedrock_agent/scripts/enrich_i18n.py': [Errno 2] No such file or directory\n").returncode
+_______ TestPipelineEnrichmentStage.test_stage_order_includes_enrichment _______
+tests/test_enrichment_optional.py:339: in test_stage_order_includes_enrichment
+    ).read_text()
+      ^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/pathlib.py:1058: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/pathlib.py:1044: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+_______ TestPipelineEnrichmentStage.test_enrichment_mode_default_is_none _______
+tests/test_enrichment_optional.py:357: in test_enrichment_mode_default_is_none
+    ).read_text()
+      ^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/pathlib.py:1058: in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../../.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/pathlib.py:1044: in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   FileNotFoundError: [Errno 2] No such file or directory: '/home/ubuntu/projects/hermes_bedrock_agent/scripts/run_e2e_murata_pipeline.py'
+__________ TestSafety.test_enrichment_settings_no_neptune_by_default ___________
+tests/test_enrichment_optional.py:371: in test_enrichment_settings_no_neptune_by_default
+    from hermes_bedrock_agent.configs.settings import EnrichmentSettings
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.configs'
+___________ TestSafety.test_run_enrichment_mode_none_no_side_effects ___________
+tests/test_enrichment_optional.py:378: in test_run_enrichment_mode_none_no_side_effects
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+___________________ TestSafety.test_mode_rule_no_llm_import ____________________
+tests/test_enrichment_optional.py:393: in test_mode_rule_no_llm_import
+    from hermes_bedrock_agent.graph.i18n_enricher import run_enrichment
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.graph'
+_ TestQueryEntityExtractorWithoutI18n.test_entity_index_works_without_i18n_fields _
+tests/test_enrichment_optional.py:419: in test_entity_index_works_without_i18n_fields
+    from hermes_bedrock_agent.retrieval.query_entity_extractor import EntityIndex
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.retrieval.query_entity_extractor'
+_ TestQueryEntityExtractorWithoutI18n.test_entity_index_works_with_i18n_fields _
+tests/test_enrichment_optional.py:445: in test_entity_index_works_with_i18n_fields
+    from hermes_bedrock_agent.retrieval.query_entity_extractor import EntityIndex
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.retrieval.query_entity_extractor'
+________ TestVisualizationFallback.test_resolve_label_fallback_no_i18n _________
+tests/test_enrichment_optional.py:493: in test_resolve_label_fallback_no_i18n
+    from hermes_bedrock_agent.visualization.mermaid_generator import (
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.visualization'
+_________ TestVisualizationFallback.test_resolve_label_technical_mode __________
+tests/test_enrichment_optional.py:508: in test_resolve_label_technical_mode
+    from hermes_bedrock_agent.visualization.mermaid_generator import (
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.visualization'
+_____ TestVisualizationFallback.test_resolve_label_business_mode_with_i18n _____
+tests/test_enrichment_optional.py:529: in test_resolve_label_business_mode_with_i18n
+    from hermes_bedrock_agent.visualization.mermaid_generator import (
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.visualization'
+___________ TestVisualizationFallback.test_resolve_label_mixed_mode ____________
+tests/test_enrichment_optional.py:549: in test_resolve_label_mixed_mode
+    from hermes_bedrock_agent.visualization.mermaid_generator import (
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.visualization'
+_ TestVisualizationFallback.test_resolve_label_business_missing_lang_fallback __
+tests/test_enrichment_optional.py:571: in test_resolve_label_business_missing_lang_fallback
+    from hermes_bedrock_agent.visualization.mermaid_generator import (
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.visualization'
+___________ TestVisualizationFallback.test_sanitize_id_always_ascii ____________
+tests/test_enrichment_optional.py:592: in test_sanitize_id_always_ascii
+    from hermes_bedrock_agent.visualization.mermaid_generator import (
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.visualization'
+___________ TestVisualizationFallback.test_sanitize_id_deterministic ___________
+tests/test_enrichment_optional.py:606: in test_sanitize_id_deterministic
+    from hermes_bedrock_agent.visualization.mermaid_generator import (
+E   ModuleNotFoundError: No module named 'hermes_bedrock_agent.visualization'
+=========================== short test summary info ============================
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_artifact_dir_created
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_save_and_load_jsonl
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_append_jsonl
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_save_json
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_save_text
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_record_failure
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_get_existing_ids
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_load_jsonl_missing_file
+FAILED tests/test_e2e_murata_pipeline.py::TestPipelineState::test_pydantic_model_save
+FAILED tests/test_e2e_murata_pipeline.py::TestStageScan::test_scan_filters_system_files
+FAILED tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_infer_source_type
+FAILED tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_split_markdown_sections
+FAILED tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_split_sql_sections
+FAILED tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_split_code_sections_java
+FAILED tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_parse_text_unicode
+FAILED tests/test_e2e_murata_pipeline.py::TestParseHelpers::test_parse_text_shift_jis_fallback
+FAILED tests/test_e2e_murata_pipeline.py::TestStageChunk::test_chunk_from_normalized_docs
+FAILED tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_default_args
+FAILED tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_stage_scan - F...
+FAILED tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_live_neptune_flags
+FAILED tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_no_vlm_flag - ...
+FAILED tests/test_e2e_murata_pipeline.py::TestCLIParsing::test_mode_and_s3_uri
+FAILED tests/test_e2e_murata_pipeline.py::TestFinalReports::test_generate_final_reports
+FAILED tests/test_e2e_murata_pipeline.py::TestFinalReports::test_generate_reports_with_failures
+FAILED tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_exclude_pattern_matches_filename
+FAILED tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_skip_embedding_pattern_only_affects_embedding
+FAILED tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_skip_graph_extraction_pattern_only_affects_graph
+FAILED tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_no_patterns_returns_all
+FAILED tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_wildcard_matches_multiple_files
+FAILED tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_combined_exclude_and_stage_patterns
+FAILED tests/test_e2e_murata_pipeline.py::TestExcludePatterns::test_matches_source_uri
+FAILED tests/test_e2e_scripts.py::TestExportMermaid::test_filter_by_center_bfs
+FAILED tests/test_e2e_scripts.py::TestExportMermaid::test_filter_no_match_returns_limited
+FAILED tests/test_e2e_scripts.py::TestExportMermaid::test_build_from_artifacts
+FAILED tests/test_e2e_scripts.py::TestExportMermaid::test_load_jsonl - FileNo...
+FAILED tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_disabled
+FAILED tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_mode_none
+FAILED tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_no_neptune_update
+FAILED tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_require_confirm
+FAILED tests/test_enrichment_optional.py::TestEnrichmentSettings::test_default_max_entities
+FAILED tests/test_enrichment_optional.py::TestEnrichmentSettings::test_app_settings_enrichment_property
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_none_returns_none
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_returns_results
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_priority_entity_has_i18n
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_writes_artifacts
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_relation_builtin_labels
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_mock_returns_results
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_llm_warns_from_pipeline
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_rule_max_entities_respected
+FAILED tests/test_enrichment_optional.py::TestRunEnrichment::test_mode_none_no_llm_call
+FAILED tests/test_enrichment_optional.py::TestEnrichI18nCLI::test_mode_none_prints_info_and_exits
+FAILED tests/test_enrichment_optional.py::TestEnrichI18nCLI::test_update_neptune_without_confirm_fails
+FAILED tests/test_enrichment_optional.py::TestPipelineEnrichmentStage::test_stage_order_includes_enrichment
+FAILED tests/test_enrichment_optional.py::TestPipelineEnrichmentStage::test_enrichment_mode_default_is_none
+FAILED tests/test_enrichment_optional.py::TestSafety::test_enrichment_settings_no_neptune_by_default
+FAILED tests/test_enrichment_optional.py::TestSafety::test_run_enrichment_mode_none_no_side_effects
+FAILED tests/test_enrichment_optional.py::TestSafety::test_mode_rule_no_llm_import
+FAILED tests/test_enrichment_optional.py::TestQueryEntityExtractorWithoutI18n::test_entity_index_works_without_i18n_fields
+FAILED tests/test_enrichment_optional.py::TestQueryEntityExtractorWithoutI18n::test_entity_index_works_with_i18n_fields
+FAILED tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_fallback_no_i18n
+FAILED tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_technical_mode
+FAILED tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_business_mode_with_i18n
+FAILED tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_mixed_mode
+FAILED tests/test_enrichment_optional.py::TestVisualizationFallback::test_resolve_label_business_missing_lang_fallback
+FAILED tests/test_enrichment_optional.py::TestVisualizationFallback::test_sanitize_id_always_ascii
+FAILED tests/test_enrichment_optional.py::TestVisualizationFallback::test_sanitize_id_deterministic
+========================= 66 failed, 7 passed in 8.97s =========================

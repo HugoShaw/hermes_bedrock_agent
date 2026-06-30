@@ -58,7 +58,7 @@ class TestCLIParsing:
         assert args.use_enrichment is False
         assert args.show_prompt is False
         assert args.no_color is False
-        assert args.neptune_endpoint == "g-nbuyck5yl8.ap-northeast-1.neptune-graph.amazonaws.com"
+        assert args.neptune_endpoint == "g-example01.ap-northeast-1.neptune-graph.amazonaws.com"
 
     def test_neptune_graph_id_cli(self):
         from qa_terminal import parse_args
@@ -84,7 +84,7 @@ class TestCLIParsing:
         assert args.neptune_graph_id == "g-abc123"
 
     def test_neptune_graph_id_default_inferred(self):
-        """Default endpoint should yield g-nbuyck5yl8."""
+        """Default endpoint should yield g-example01."""
         from qa_terminal import parse_args
 
         # If env has NEPTUNE_GRAPH_ID, CLI infers from env first
@@ -92,8 +92,8 @@ class TestCLIParsing:
         from qa_terminal import extract_graph_id_from_endpoint
 
         assert extract_graph_id_from_endpoint(
-            "g-nbuyck5yl8.ap-northeast-1.neptune-graph.amazonaws.com"
-        ) == "g-nbuyck5yl8"
+            "g-example01.ap-northeast-1.neptune-graph.amazonaws.com"
+        ) == "g-example01"
 
     def test_mock_answer_flag(self):
         from qa_terminal import parse_args
@@ -139,8 +139,8 @@ class TestGraphIdExtraction:
         from qa_terminal import extract_graph_id_from_endpoint
 
         assert extract_graph_id_from_endpoint(
-            "g-nbuyck5yl8.ap-northeast-1.neptune-graph.amazonaws.com"
-        ) == "g-nbuyck5yl8"
+            "g-testnode01.ap-northeast-1.neptune-graph.amazonaws.com"
+        ) == "g-testnode01"
 
     def test_different_region(self):
         from qa_terminal import extract_graph_id_from_endpoint
@@ -180,7 +180,7 @@ class TestDisplayHelpers:
     def test_shorten_uri_long_path(self):
         from qa_terminal import shorten_uri
 
-        uri = "s3://s3-hulftchina-rd/Murata/docs/subsystem/module/JournalBaseService.java"
+        uri = "s3://my-bucket/Murata/docs/subsystem/module/JournalBaseService.java"
         short = shorten_uri(uri, max_len=40)
         assert "JournalBaseService.java" in short
         assert "..." in short
@@ -695,3 +695,99 @@ class TestNoColor:
         output = format_result(result, "debug")
         assert "[A]" in output  # Plain text markers
         assert "\x1b" not in output  # No ANSI escape codes
+
+
+# ---------------------------------------------------------------------------
+# 14. Graph expansion trace display
+# ---------------------------------------------------------------------------
+
+class TestGraphExpansionTraceDisplay:
+    """Verify _print_graph_expansion_trace renders without error."""
+
+    def test_disabled_trace_prints_nothing(self, capsys):
+        from hermes_bedrock_agent.retrieval.trace import RetrievalTrace
+        from hermes_bedrock_agent.qa.terminal import _print_graph_expansion_trace
+
+        trace = RetrievalTrace(enabled=True)
+        # graph_expansion.enabled defaults to False → should print nothing
+        _print_graph_expansion_trace(trace)
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_enabled_trace_prints_sections(self, capsys):
+        from hermes_bedrock_agent.retrieval.trace import RetrievalTrace, GraphExpansionTrace
+        from hermes_bedrock_agent.qa.terminal import _print_graph_expansion_trace
+
+        trace = RetrievalTrace(enabled=True)
+        trace.graph_expansion = GraphExpansionTrace(
+            enabled=True,
+            neptune_available=True,
+            entities_extracted=[
+                {"text": "発注登録API", "type": "api_name", "confidence": 0.8},
+                {"text": "債務奉行", "type": "system_name", "confidence": 0.7},
+            ],
+            relation_allowlist=["CALLS_API", "HAS_PARAMETER", "NEXT_STEP"],
+            expansion_hops=2,
+            graph_nodes_matched=3,
+            graph_paths=["発注登録API-CALLS_API->PostOrder", "PostOrder-HAS_PARAMETER->item_code"],
+            graph_candidates_count=5,
+            graph_candidates_resolved=4,
+            graph_candidates_new=2,
+            graph_candidates_duplicate=2,
+            join_methods_used={"project_workbook_sheet": 3, "project_workbook": 1},
+            candidates_before_graph=10,
+            candidates_after_graph=12,
+            graph_candidates_survived_rerank=1,
+            candidates=[
+                {
+                    "chunk_id": "excel_abc123_s03_c002",
+                    "graph_node_name": "PostOrder",
+                    "graph_node_type": "API",
+                    "join_method": "project_workbook_sheet",
+                    "join_confidence": 1.0,
+                    "already_in_initial": False,
+                    "document_name": "WB_Mapping",
+                },
+                {
+                    "chunk_id": "excel_def456_s01_c001",
+                    "graph_node_name": "item_code",
+                    "graph_node_type": "Field",
+                    "join_method": "project_workbook",
+                    "join_confidence": 0.7,
+                    "already_in_initial": True,
+                    "document_name": "WB_Fields",
+                },
+            ],
+        )
+
+        _print_graph_expansion_trace(trace)
+        captured = capsys.readouterr()
+        output = captured.out
+
+        # Verify key sections are present
+        assert "Graph Expansion" in output
+        assert "Neptune" in output
+        assert "発注登録API" in output
+        assert "CALLS_API" in output
+        assert "Nodes matched" in output
+        assert "3" in output
+        assert "project_workbook_sheet" in output
+        assert "Survived rerank" in output
+        assert "PostOrder" in output
+        assert "DUP" in output  # for already_in_initial
+
+    def test_error_trace_prints_error(self, capsys):
+        from hermes_bedrock_agent.retrieval.trace import RetrievalTrace, GraphExpansionTrace
+        from hermes_bedrock_agent.qa.terminal import _print_graph_expansion_trace
+
+        trace = RetrievalTrace(enabled=True)
+        trace.graph_expansion = GraphExpansionTrace(
+            enabled=True,
+            neptune_available=False,
+            error="Connection timed out",
+        )
+
+        _print_graph_expansion_trace(trace)
+        captured = capsys.readouterr()
+        assert "UNAVAILABLE" in captured.out
+        assert "Connection timed out" in captured.out

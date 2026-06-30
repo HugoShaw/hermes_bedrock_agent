@@ -1,4 +1,8 @@
-"""Load extracted graph entities into Neptune Analytics via openCypher MERGE.
+"""[LEGACY] Load extracted graph entities into Neptune Analytics via openCypher MERGE.
+
+DEPRECATED: This module is superseded by hermes_bedrock_agent.graph_pipeline.
+Use the new pipeline: `dualrag graph <project-dir>` or import from graph_pipeline.
+Kept for backward compatibility with the `dualrag build-kb` flow.
 
 Supports two modes:
   1. Legacy keyword-based: extract_entities() per chunk (fast, no LLM cost)

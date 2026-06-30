@@ -13,6 +13,7 @@ dependencies = [
   "Pillow>=10.0",
   "lancedb>=0.20",
   "pyarrow",
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

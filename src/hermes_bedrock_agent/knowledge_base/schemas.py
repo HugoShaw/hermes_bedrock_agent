@@ -11,18 +11,39 @@ class Chunk(BaseModel):
     chunk_id: str
     content: str
     chunk_type: str  # overview|flowchart|mapping_table|data_condition|business_rule|api_spec|cross_sheet_summary
-    sheet_index: int
-    sheet_name: str
-    workbook_name: str
-    source_pdf_s3_path: str
-    source_excel_s3_path: str
-    source_markdown_s3_path: str
+    # --- Generic fields (always present) ---
+    source_file: str = ""
+    source_type: str = ""
+    parser_type: str = ""
+    document_role: str = ""
+    project_id: str = ""
+    content_hash: str = ""
+    source_markdown_file: str = ""
+    chunk_mode: str = ""
+    section_name: str = ""
+    # --- Document-level metadata from frontmatter ---
+    document_id: str = ""
+    document_name: str = ""
+    document_type: str = ""
+    display_name: str = ""
+    unit_type: str = ""
+    original_relative_path: str = ""
+    parser_version: str = ""
+    evidence_path: str = ""
+    evidence_paths: list[str] = Field(default_factory=list)
+    # --- Excel-specific (optional, defaults to empty/zero) ---
+    sheet_index: int = 0
+    sheet_name: str = ""
+    workbook_name: str = ""
+    source_pdf_s3_path: str = ""
+    source_excel_s3_path: str = ""
+    source_markdown_s3_path: str = ""
     related_sheets: list[int] = Field(default_factory=list)
     systems: list[str] = Field(default_factory=list)
     apis: list[str] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
-    embedding_text: str
-    project_id: str = ""
+    field_codes: list[str] = Field(default_factory=list)
+    embedding_text: str = ""
 
 
 class EmbeddedChunk(Chunk):
@@ -49,12 +70,23 @@ class RetrievedChunk(BaseModel):
     chunk_id: str
     content: str
     chunk_type: str
-    sheet_index: int
-    sheet_name: str
-    score: float
-    source_pdf_s3_path: str
-    source_excel_s3_path: str
+    sheet_index: int = 0
+    sheet_name: str = ""
+    score: float = 0.0
+    source_pdf_s3_path: str = ""
+    source_excel_s3_path: str = ""
     project_id: str = ""
+    parsed_markdown_path: str = ""
+    # Provenance fields
+    document_id: str = ""
+    document_name: str = ""
+    document_type: str = ""
+    source_markdown_file: str = ""
+    evidence_path: str = ""
+    evidence_paths: str = ""
+    source_file: str = ""
+    source_type: str = ""
+    parser_type: str = ""
 
 
 class GraphContext(BaseModel):
@@ -67,6 +99,8 @@ class QAResponse(BaseModel):
     chunks: list[RetrievedChunk] = Field(default_factory=list)
     evidence_paths: list[str] = Field(default_factory=list)
     graph_context: Optional[GraphContext] = None
+    # Graph guidance status: "strong", "weak", "none", "disabled", "error"
+    guidance_status: str = "none"
 
 
 class QAAnswerResponse(QAResponse):
