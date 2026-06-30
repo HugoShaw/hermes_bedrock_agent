@@ -40,8 +40,17 @@ versions:
     file: "v451_semantic_map.md"
     scope: document
     adapter: document_to_chunk
-    status: experimental
-    description: "Document-level extraction v4.5.1 final with external extraction rules, strict ID/endpoint contract, edge promotion diagnostics, and mandatory relationship coverage triggers."
+    status: deprecated
+    description: "Document-level extraction v4.5.1 final with external extraction rules, strict ID/endpoint contract, edge promotion diagnostics, and mandatory relationship coverage triggers. Superseded by v4.5.2."
     created_at: "2025-06-17"
+
+  v4.5.2:
+    name: "V4.5.2 Fixed with External Rules"
+    file: "v452_semantic_map.md"
+    scope: document
+    adapter: document_to_chunk
+    status: experimental
+    description: "Document-level extraction v4.5.2 fixed with external extraction rules. Refined P0 rules, enhanced preflight checklist (31 checks), updated output schema (semantic_map_v4_5_2_fixed/), and stricter evidence/endpoint/relationship preservation contracts."
+    created_at: "2025-06-22"
 
 default: v4.3

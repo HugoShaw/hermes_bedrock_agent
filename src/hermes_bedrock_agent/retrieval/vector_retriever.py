@@ -3,29 +3,15 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Optional
 
 from ..config import Config, config as _default_config
 from ..knowledge_base.schemas import RetrievedChunk
 from ..knowledge_base.vector_store import query_vector_store
 from .trace import VectorTrace
+from ._utils import _safe_str
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_str(val: object) -> str:
-    """Convert a pandas row value to a clean string, handling NaN/None/float safely."""
-    if val is None:
-        return ""
-    if isinstance(val, float):
-        if math.isnan(val):
-            return ""
-        return str(val)
-    s = str(val).strip()
-    if s in ("nan", "None", "null"):
-        return ""
-    return s
 
 
 def retrieve_chunks(

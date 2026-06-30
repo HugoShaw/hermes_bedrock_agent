@@ -12,6 +12,9 @@ from ..config import Config, config as _default_config
 
 logger = logging.getLogger(__name__)
 
+# Scan limit for pandas-based keyword search
+KEYWORD_SCAN_LIMIT = 2000
+
 
 def _extract_search_keywords(query: str) -> list[str]:
     """Extract meaningful keywords from a query for lexical matching."""
@@ -74,9 +77,17 @@ def keyword_search(
 
     # Load filtered data to pandas for in-memory keyword matching
     if filter_expr:
-        df = table.search().where(filter_expr, prefilter=True).limit(2000).to_pandas()
+        df = table.search().where(filter_expr, prefilter=True).limit(KEYWORD_SCAN_LIMIT).to_pandas()
     else:
-        df = table.search().limit(2000).to_pandas()
+        df = table.search().limit(KEYWORD_SCAN_LIMIT).to_pandas()
+
+    # Detect possible truncation
+    keyword_scan_truncated = len(df) >= KEYWORD_SCAN_LIMIT
+    if keyword_scan_truncated:
+        logger.warning(
+            "keyword_search reached scan limit %d; results may be truncated for project_id=%s",
+            KEYWORD_SCAN_LIMIT, project_id or "(all)",
+        )
 
     if df.empty:
         return []

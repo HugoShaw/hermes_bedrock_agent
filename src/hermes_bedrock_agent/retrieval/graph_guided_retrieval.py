@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import math
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -12,22 +11,9 @@ from ..config import Config, config as _default_config
 from ..knowledge_base.schemas import RetrievedChunk
 from .graph_retriever import DualGraphContext, _extract_entity_names, _node_from_row, _scan_edge_confidence
 from .trace import RetrievalTrace, Timer, VectorTrace
+from ._utils import _safe_str
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_str(val: object) -> str:
-    """Convert a pandas/dict value to a clean string, handling NaN/None/float safely."""
-    if val is None:
-        return ""
-    if isinstance(val, float):
-        if math.isnan(val):
-            return ""
-        return str(val)
-    s = str(val).strip()
-    if s in ("nan", "None", "null"):
-        return ""
-    return s
 
 
 # Chunk types that indicate high-level architectural content — useful as fallback

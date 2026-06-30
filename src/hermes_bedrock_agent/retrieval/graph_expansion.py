@@ -11,24 +11,9 @@ import lancedb
 from ..clients.neptune import NeptuneClient
 from ..config import Config, config as _default_config
 from .entity_extractor import ExtractedEntity
+from ._utils import _safe_str
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_str(val: object) -> str:
-    """Convert a pandas row value to a clean string, handling NaN/None/float safely."""
-    if val is None:
-        return ""
-    if isinstance(val, float):
-        # NaN from pandas
-        import math
-        if math.isnan(val):
-            return ""
-        return str(val)
-    s = str(val).strip()
-    if s in ("nan", "None", "null"):
-        return ""
-    return s
 
 # Intent-aware relation allowlists (actual Neptune graph schema)
 INTENT_RELATION_ALLOWLISTS: dict[str, list[str]] = {
@@ -171,12 +156,8 @@ def expand_graph(
             if project_id:
                 cypher += " AND (n.project_id = $pid OR n.source_project_key = $pid OR n.project_id = $pidalt)"
                 params["pid"] = project_id
-                # Also try the Japanese-style project name that Neptune uses
-                _neptune_pid_map = {
-                    "sample_20260519": "サンプル20260519",
-                    "saimu_bugyo_cloud": "14_債務奉行クラウド",
-                }
-                params["pidalt"] = _neptune_pid_map.get(project_id, project_id)
+                from .project_mapping import to_neptune_project_alias
+                params["pidalt"] = to_neptune_project_alias(project_id)
             cypher += " RETURN n LIMIT 5"
 
             rows = client.execute_query(cypher, parameters=params).get("results", [])
@@ -213,11 +194,8 @@ def expand_graph(
             if project_id:
                 hop_cypher += " AND (m.project_id = $pid OR m.source_project_key = $pid OR m.project_id = $pidalt)"
                 hop_params["pid"] = project_id
-                _neptune_pid_map2 = {
-                    "sample_20260519": "サンプル20260519",
-                    "saimu_bugyo_cloud": "14_債務奉行クラウド",
-                }
-                hop_params["pidalt"] = _neptune_pid_map2.get(project_id, project_id)
+                from .project_mapping import to_neptune_project_alias
+                hop_params["pidalt"] = to_neptune_project_alias(project_id)
             hop_cypher += " RETURN n, type(r) AS rel, m LIMIT 10"
 
             rows = client.execute_query(hop_cypher, parameters=hop_params).get("results", [])
@@ -255,11 +233,8 @@ def expand_graph(
                 if project_id:
                     hop2_cypher += " AND (p.project_id = $pid OR p.source_project_key = $pid OR p.project_id = $pidalt)"
                     hop2_params["pid"] = project_id
-                    _neptune_pid_map3 = {
-                        "sample_20260519": "サンプル20260519",
-                        "saimu_bugyo_cloud": "14_債務奉行クラウド",
-                    }
-                    hop2_params["pidalt"] = _neptune_pid_map3.get(project_id, project_id)
+                    from .project_mapping import to_neptune_project_alias
+                    hop2_params["pidalt"] = to_neptune_project_alias(project_id)
                 hop2_cypher += " RETURN n, type(r1) AS rel1, m, type(r2) AS rel2, p LIMIT 5"
 
                 rows2 = client.execute_query(hop2_cypher, parameters=hop2_params).get("results", [])

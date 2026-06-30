@@ -75,6 +75,9 @@ class HybridTrace:
     keyword_query: str = ""
     vector_hits_count: int = 0
     keyword_hits_count: int = 0
+    keyword_scan_limit: int = 0
+    keyword_scan_rows: int = 0
+    keyword_scan_truncated: bool = False
     merged_count: int = 0
     dedup_removed: int = 0
 

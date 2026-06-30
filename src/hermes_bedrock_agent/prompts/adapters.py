@@ -77,6 +77,7 @@ _DOCUMENT_TO_CHUNK_MODULES = {
     "v4.4": "hermes_bedrock_agent.experiments.v44_prompts",
     "v4.5": "hermes_bedrock_agent.experiments.v45_prompts",
     "v4.5.1": "hermes_bedrock_agent.experiments.v451_prompts",
+    "v4.5.2": "hermes_bedrock_agent.experiments.v452_prompts",
 }
 
 _DOCUMENT_TO_CHUNK_PREFIXES = {
@@ -84,6 +85,7 @@ _DOCUMENT_TO_CHUNK_PREFIXES = {
     "v4.4": "V44",
     "v4.5": "V45",
     "v4.5.1": "V451",
+    "v4.5.2": "V452",
 }
 
 

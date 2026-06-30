@@ -126,6 +126,8 @@ class _Session:
         self.vector_only: bool = False
         self.rerank_override: Optional[bool] = None
         self.last_trace: Optional["RetrievalTrace"] = None
+        self.graph_format: str = "compact"  # compact | table | network | raw
+        self.last_dual_graph = None  # for /save-graph export
 
 
 def _load_catalog(catalog_dir: Optional[Path]) -> list[dict]:
@@ -181,7 +183,10 @@ def _print_chunks(chunks, verbose: bool = False) -> None:
         print()
 
 
-def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW, neptune_available: bool = True) -> None:
+def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW, neptune_available: bool = True,
+                 *, graph_format: str = "compact", show_raw_ids: bool = False) -> None:
+    from .graph_display import format_graph
+
     print(_divider(title, "━", color))
     if gc is None:
         if not neptune_available:
@@ -195,21 +200,20 @@ def _print_graph(gc, title: str = "Graph Context", color: str = BYELLOW, neptune
         print()
         return
     print(f"  {_c(f'Nodes: {len(gc.nodes)}', BYELLOW)}  {_c(f'Edges: {len(gc.edges)}', YELLOW)}")
-    for node in gc.nodes[:10]:
-        props = node.get("properties", {})
-        name = props.get("name", props.get("sheet_name", ""))
-        suffix = f" — {name}" if name else ""
-        print(f"  {_c('●', YELLOW)} [{node.get('label', '')}] {node.get('id', '?')}{suffix}")
-    if len(gc.nodes) > 10:
-        print(_c(f"    … {len(gc.nodes) - 10} more nodes", DIM))
-    for edge in gc.edges[:10]:
-        print(f"  {_c('→', CYAN)} {edge.get('from', '?')} --{edge.get('relationship', '?')}--> {edge.get('to', '?')}")
-    if len(gc.edges) > 10:
-        print(_c(f"    … {len(gc.edges) - 10} more edges", DIM))
+
+    lines = format_graph(
+        gc.nodes, gc.edges,
+        fmt=graph_format,
+        show_raw_ids=show_raw_ids,
+        max_edges=30,
+    )
+    for line in lines:
+        print(_c(line, CYAN) if line.startswith("  →") or line.startswith("    raw:") else line)
     print()
 
 
-def _print_dual_graph(dual, neptune_available: bool = True) -> None:
+def _print_dual_graph(dual, neptune_available: bool = True,
+                      *, graph_format: str = "compact", show_raw_ids: bool = False) -> None:
     """Print two-layer graph context."""
     if dual is None:
         _print_graph(None, neptune_available=neptune_available)
@@ -218,8 +222,10 @@ def _print_dual_graph(dual, neptune_available: bool = True) -> None:
         _print_graph(None, "Business Semantic Graph", BYELLOW, neptune_available=True)
         _print_graph(None, "Implementation Graph", BCYAN, neptune_available=True)
         return
-    _print_graph(dual.business, "Business Semantic Graph", BYELLOW)
-    _print_graph(dual.implementation, "Implementation Graph", BCYAN)
+    _print_graph(dual.business, "Business Semantic Graph", BYELLOW,
+                 graph_format=graph_format, show_raw_ids=show_raw_ids)
+    _print_graph(dual.implementation, "Implementation Graph", BCYAN,
+                 graph_format=graph_format, show_raw_ids=show_raw_ids)
 
 
 def _print_evidence_flow(chunks, dual_graph, evidence_images, elapsed: float, project_id: str = "") -> None:
@@ -460,6 +466,10 @@ def _cmd_help() -> None:
         ("/trace",                        "Toggle full retrieval trace"),
         ("/rerank [on|off]",              "Toggle reranking (Bedrock rerank-v1)"),
         ("/vector-only",                  "Toggle vector-only mode (skip graph)"),
+        ("/graph-format [compact|table|network|raw]", "Change graph display format"),
+        ("/save-graph [path]",            "Export last graph as Mermaid .mmd"),
+        ("/save-trace [path]",            "Save last retrieval trace as JSON"),
+        ("/ask-file <path>",              "Read query from a text file"),
         ("/isolation",                    "Show last isolation check status"),
         ("/history",                      "Show recent query history"),
         ("/last",                         "Repeat the last query"),
@@ -471,9 +481,10 @@ def _cmd_help() -> None:
         ("/quit  or  /exit",              "Exit the terminal"),
     ]
     for cmd, desc in cmds:
-        print(f"  {_c(cmd.ljust(32), BCYAN)} {_c(desc, DIM)}")
+        print(f"  {_c(cmd.ljust(42), BCYAN)} {_c(desc, DIM)}")
     print()
     print(_c("  Any text without / is treated as a QA query in the current mode.", DIM))
+    print(_c("  Triple-quote block: start with \"\"\" and end with \"\"\" for multiline queries.", DIM))
     print()
 
 
@@ -759,10 +770,12 @@ def _run_answer(query: str, s: _Session) -> None:
     _print_chunks(chunks, verbose=s.verbose)
 
     # Show graph context
+    show_raw = s.debug_retrieval or s.show_graph_trace or s.verbose
     if dual_graph and not dual_graph.is_empty:
-        _print_dual_graph(dual_graph)
+        _print_dual_graph(dual_graph, graph_format=s.graph_format, show_raw_ids=show_raw)
+        s.last_dual_graph = dual_graph
     elif dual_graph is not None:
-        _print_dual_graph(dual_graph, neptune_available=True)
+        _print_dual_graph(dual_graph, neptune_available=True, graph_format=s.graph_format, show_raw_ids=show_raw)
     else:
         neptune_ok = guidance_status != "error"
         _print_dual_graph(None, neptune_available=neptune_ok)
@@ -862,7 +875,10 @@ def _run_graph(query: str, s: _Session) -> None:
         _print_graph_trace(trace.graph)
 
     _print_chunks(chunks, verbose=s.verbose)
-    _print_dual_graph(dual_graph)
+    show_raw = s.debug_retrieval or s.show_graph_trace or s.verbose
+    _print_dual_graph(dual_graph, graph_format=s.graph_format, show_raw_ids=show_raw)
+    if dual_graph:
+        s.last_dual_graph = dual_graph
 
     if trace and trace.isolation.project_id and s.debug_retrieval:
         _print_isolation_status(trace.isolation, strict=s.strict_isolation)
@@ -893,6 +909,107 @@ def _handle_query(query: str, s: _Session) -> bool:
             traceback.print_exc()
     s.query_count += 1
     return True
+
+
+def _cmd_save_graph(s: _Session, args: list[str]) -> None:
+    """Export the last retrieved graph as Mermaid .mmd file."""
+    from .graph_display import export_graph_mermaid
+
+    if s.last_dual_graph is None or s.last_dual_graph.is_empty:
+        print(_c("  No graph available. Run a query first.", YELLOW))
+        return
+
+    # Determine output path
+    if args:
+        out_path = Path(args[0]).expanduser()
+    else:
+        out_dir = Path.home() / ".hermes_qa_exports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_path = out_dir / f"graph_{ts}.mmd"
+
+    # Merge both layers for export
+    merged = s.last_dual_graph.to_merged_context()
+    mermaid_text = export_graph_mermaid(merged.nodes, merged.edges)
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(mermaid_text, encoding="utf-8")
+        print(_c(f"  Graph exported → {out_path}", BGREEN))
+        print(_c(f"  ({len(merged.nodes)} nodes, {len(merged.edges)} edges)", DIM))
+    except Exception as exc:
+        print(_c(f"  Export failed: {exc}", RED))
+
+
+def _cmd_save_trace(s: _Session, args: list[str]) -> None:
+    """Save last retrieval trace as JSON."""
+    import json
+    import hashlib
+    from dataclasses import asdict
+
+    if s.last_trace is None:
+        print(_c("  No trace available. Run a query first.", YELLOW))
+        return
+
+    # Determine output path
+    if args:
+        out_path = Path(args[0]).expanduser()
+    else:
+        out_dir = Path.home() / ".hermes_qa_traces"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        q_hash = hashlib.md5((s.last_query or "").encode()).hexdigest()[:8]
+        out_path = out_dir / f"qa_trace_{ts}_{q_hash}.json"
+
+    # Serialize trace safely
+    try:
+        trace_dict = asdict(s.last_trace)
+    except Exception:
+        # Fallback: manual serialization of known fields
+        trace_dict = {"error": "Could not fully serialize trace"}
+
+    # Add metadata
+    trace_dict["_meta"] = {
+        "query": s.last_query or "",
+        "project_id": s.project_id,
+        "mode": s.mode,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(trace_dict, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        print(_c(f"  Trace saved → {out_path}", BGREEN))
+    except Exception as exc:
+        print(_c(f"  Save failed: {exc}", RED))
+
+
+def _cmd_ask_file(filepath: str, s: _Session) -> None:
+    """Read query from file and execute it."""
+    MAX_FILE_SIZE = 64 * 1024  # 64 KB
+
+    try:
+        p = Path(filepath).expanduser()
+        if not p.exists():
+            print(_c(f"  File not found: {filepath}", RED))
+            return
+        if not p.is_file():
+            print(_c(f"  Not a file: {filepath}", RED))
+            return
+        size = p.stat().st_size
+        if size == 0:
+            print(_c("  File is empty.", YELLOW))
+            return
+        if size > MAX_FILE_SIZE:
+            print(_c(f"  File too large ({size:,} bytes, max {MAX_FILE_SIZE:,}). Truncating.", YELLOW))
+        content = p.read_text(encoding="utf-8")[:MAX_FILE_SIZE].strip()
+        if not content:
+            print(_c("  File content is empty after stripping.", YELLOW))
+            return
+        print(_c(f"  Reading query from: {filepath} ({len(content)} chars)", DIM))
+        _handle_query(content, s)
+    except Exception as exc:
+        print(_c(f"  Error reading file: {exc}", RED))
 
 
 def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bool:
@@ -971,6 +1088,24 @@ def _handle_command(cmd: str, s: _Session, model_id: str, collection: str) -> bo
             _cmd_sheet(int(args[0]), s)
         else:
             print(_c("  Usage: /sheet N", YELLOW))
+    elif name in ("graph-format", "graphformat"):
+        from .graph_display import GRAPH_FORMATS
+        if args and args[0].lower() in GRAPH_FORMATS:
+            s.graph_format = args[0].lower()
+            print(_c(f"  Graph format → {s.graph_format}", BGREEN))
+        else:
+            print(_c(f"  Usage: /graph-format [{' | '.join(GRAPH_FORMATS)}]", YELLOW))
+            print(_c(f"  Current: {s.graph_format}", DIM))
+    elif name in ("save-graph", "export-graph-mermaid"):
+        _cmd_save_graph(s, args)
+    elif name in ("save-trace", "savetrace"):
+        _cmd_save_trace(s, args)
+    elif name in ("ask-file", "askfile"):
+        # File input: /ask-file /path/to/file.txt
+        if not args:
+            print(_c("  Usage: /ask-file <path>", YELLOW))
+        else:
+            _cmd_ask_file(args[0], s)
     else:
         print(_c(f"  Unknown command: /{name}  (try /help)", YELLOW))
     return True
@@ -981,6 +1116,8 @@ _TAB_COMMANDS = [
     "/topk ", "/verbose", "/evidence",
     "/trace", "/rerank", "/rerank on", "/rerank off",
     "/vector-only", "/isolation",
+    "/graph-format compact", "/graph-format table", "/graph-format network", "/graph-format raw",
+    "/save-graph ", "/save-trace ", "/ask-file ",
     "/history", "/last", "/stats",
     "/sheets", "/sheet ", "/help", "/clear", "/quit", "/exit",
 ]
@@ -1067,6 +1204,27 @@ def run_terminal(
 
         if not raw:
             continue
+
+        # Triple-quote multiline input support
+        if raw.startswith('"""'):
+            lines = [raw[3:]]  # content after opening """
+            while True:
+                try:
+                    line = input("... ")
+                except (EOFError, KeyboardInterrupt):
+                    print(_c("\n  (Multiline input cancelled)", YELLOW))
+                    lines = []
+                    break
+                if line.rstrip().endswith('"""'):
+                    lines.append(line.rstrip()[:-3])
+                    break
+                lines.append(line)
+            if not lines:
+                continue
+            raw = "\n".join(lines).strip()
+            if not raw:
+                continue
+            print(_c(f"  (Multiline query: {len(raw)} chars)", DIM))
 
         if raw.startswith("/"):
             if not _handle_command(raw, session, model_id, collection):
